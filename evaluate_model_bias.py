@@ -59,7 +59,12 @@ def evaluate_summarization_bias(content_title, research_question, codebook, summ
 
     results += "\n\n\n" + generate_chi_square_heatmap(full_codebook_scores[content_title], abstract_summary_scores[content_title], name=content_title)
     categories = list(set(full_codebook_scores[content_title].keys()).union(abstract_summary_scores[content_title].keys(), extractive_summary_scores[content_title].keys()))
-    results +="\n\n\n" + generate_line_graph(full_codebook_scores[content_title], abstract_summary_scores[content_title], extractive_summary_scores[content_title], categories, name=content_title)
+    
+    comparative_scores={
+        "BART_Summary_Abstract":abstract_summary_scores[content_title], 
+        "BART_K-nn":extractive_summary_scores[content_title]
+    }
+    results+="\n"+generate_comparative_line_graph(full_codebook_scores, comparative_scores, categories, name="percentage_change_graph.png")
     print("\n\n\nRESULTS:\n")
     print(results)
     return results
@@ -295,74 +300,67 @@ def generate_chi_square_heatmap(original_counts, summarized_counts, name=""):
 
 import matplotlib.pyplot as plt
 
-def generate_line_graph(full_codebook_scores, abstract_summary_scores, extractive_summary_scores, categories, name=""):
+def generate_comparative_line_graph(full_codebook_scores, comparative_scores, categories, name="comparative_line_graph"):
     """
-    Generate a line graph showing the average change in distribution for each category.
+    Generate a dynamic line graph showing the percentage change for each category from the original text 
+    compared to multiple sets of scores, and save it as an image file. 
+    Display the average percentage change for each set of comparative scores from the original text.
 
     Args:
     full_codebook_scores (dict): Category percentages for the original text.
-    abstract_summary_scores (dict): Category percentages for the abstract summary.
-    extractive_summary_scores (dict): Category percentages for the extractive summary.
+    comparative_scores (dict): Dictionary of {label: scores} for different sets of comparative scores.
     categories (list): List of all categories.
+    name (str): Base name of the file to save the graph.
 
     Returns:
-    None
+    str: The filename where the graph is saved.
     """
-    # Initialize lists to store the average percentages
-    data = []
-    abstract_differences = []
-    extractive_differences = []
-
-
-    # Collect the data for each category
+    # Initialize a list to store the data for the graph
+    data = {label: [] for label in comparative_scores}
+    avg_changes = {label: [] for label in comparative_scores}
+    
+    # Iterate through categories and calculate percentage changes
     for category in categories:
         original_val = full_codebook_scores.get(category, 0)
-        abstract_val = abstract_summary_scores.get(category, 0)
-        extractive_val = extractive_summary_scores.get(category, 0)
-        # Calculate the absolute percentage differences
-        abstract_differences.append(abs(abstract_val - original_val))
-        extractive_differences.append(abs(extractive_val - original_val))
-        abstract_change = abstract_val - original_val
-        extractive_change = extractive_val - original_val
-        data.append([0, abstract_change, extractive_change])  # Original text starts at 0
+        for label, scores in comparative_scores.items():
+            comparative_val = scores.get(category, 0)
+            change = comparative_val - original_val
+            data[label].append(change)
+            avg_changes[label].append(change)  # Use actual change for average calculation
 
-    # Calculate the average absolute percentage change
-    avg_abstract_change = np.mean(abstract_differences)
-    avg_extractive_change = np.mean(extractive_differences)
+    # Calculate the average percentage change for each set of comparative scores
+    avg_changes = {label: np.mean(changes) for label, changes in avg_changes.items()}
 
     # Create the line graph
     plt.figure(figsize=(10, 6))
-    text_types = ['Original Text', 'BART Abstract Summary', 'K-NN Extracted Quotes']
-    
-    for i, category_data in enumerate(data):
-        plt.plot(text_types, category_data, label=categories[i], marker='o')
-    # Add the average change lines
-    # Plot the average points
-    # Plot the average points
-    #avg_data = [0, avg_abstract_change, avg_extractive_change]
-    #plt.scatter(text_types, avg_data, color='black', zorder=5)
-    plt.scatter(text_types[1:], [avg_abstract_change, avg_extractive_change], color='black', zorder=5)
+    text_types = ['Original Text'] + list(comparative_scores.keys())
 
-    plt.text(text_types[1], avg_abstract_change, f'  Avg: {avg_abstract_change:.2f}%', verticalalignment='bottom', color='black')
-    plt.text(text_types[2], avg_extractive_change, f'  Avg: {avg_extractive_change:.2f}%', verticalalignment='bottom', color='black')
+    for label, changes in data.items():
+        plt.plot(text_types, [0] + changes, label=label, marker='o')  # Original text starts at 0
+    
+    # Plot the average points for each set of comparative scores
+    for i, (label, avg_change) in enumerate(avg_changes.items(), start=1):
+        plt.scatter(text_types[i], avg_change, color='black', zorder=5)
+        plt.text(text_types[i], avg_change, f'  Avg: {avg_change:.2f}%', verticalalignment='bottom', color='black', fontsize=8)
     
     # Customize the graph
-    plt.title('Change in Category Distributions Across Summary Types')
-  #  plt.xlabel('Text Type')
-    plt.ylabel('Percentage Difference')
+    plt.title('Percentage Change per Category From Original Text Across Different Summary Types')
+    plt.xlabel('Text Type / Summary Type')
+    plt.ylabel('Percentage Change')
     plt.xticks(rotation=45, ha='right')  # Rotate text type names for better visibility
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)  # Add grid for better readability
     plt.tight_layout()
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')  # Place the legend outside the plot
     
     # Save the graph as an image file
-    name = name + "_line_graph.png"
-    plt.savefig(name, format='png', dpi=300, bbox_inches='tight')
+    file_name = f"{name}.png"
+    plt.savefig(file_name, format='png', dpi=300, bbox_inches='tight')
     
     # Display the graph
     plt.show()
 
-    return name
+    return file_name
+
 
 from youtube_transcript_api import YouTubeTranscriptApi
 def load_and_preprocess_srt(file_path):

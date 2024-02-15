@@ -17,24 +17,27 @@ BART_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
 BERT_nsp_model = BertForNextSentencePrediction.from_pretrained('bert-base-uncased')
 BERT_nsp_model.config.pad_token_id
 
-def evaluate_summarization_bias(content_title, research_question, codebook=None,summarization_ratio=1/10):
+def evaluate_summarization_bias(name, content_id, research_question, codebook=None,summarization_ratio=1/10):
     # Content can be either Youtube video id or .srt file path
-    if ".srt" in content_title:
-        transcript=load_and_preprocess_srt(content_title)
+    results = ""
+    if ".srt" in content_id:
+        transcript=load_and_preprocess_srt(content_id)
+        results += "\nEvaluating transcript:" + content_id
     else:
-        srt_dict = YouTubeTranscriptApi.get_transcript(content_title)
-        transcript = ' '.join(sub['text'] for sub in srt_dict)
-        
+        transcript=''
+        for content in content_id if isinstance(content_id,list) else [content_id]:
+            srt_dict = YouTubeTranscriptApi.get_transcript(content)
+            transcript += ' '.join(sub['text'] for sub in srt_dict)
+            results += "\nEvaluating transcript from youtube video id:" + content
+
     if codebook is None or isinstance(codebook,int):
         codebook=generate_codebook(transcript, NUM_THEMES=codebook if isinstance(codebook,int) else 3)
     summary_scores={}
 
-    results = ""
-    results += "Evaluating transcript from youtube video id:" + content_title
     total_tokens=len(BART_tokenizer.tokenize(transcript))
     max_tokens = total_tokens*summarization_ratio
-    results += f"\ntotal tokens: {total_tokens}\n Summarized to: <{max_tokens}"
-    results += str(codebook) + "\n\n"
+    results += f"\ntotal tokens: {total_tokens}\n Summarized to: <{max_tokens}\n\n"
+    results += f"Themes: \n {str(codebook)}\n\n"
     print(results)
     summaries = {}
     # ADD ANY MODEL TO COMPARE, JUST ADD TO SUMMARIES DICT TO BE EVALUATED:
@@ -53,7 +56,7 @@ def evaluate_summarization_bias(content_title, research_question, codebook=None,
 
     print("classifying baseline for original text.")
     fulltext_scored = classify_sentences(sentences, codebook, research_question, sentence_embeddings=sentence_embeddings)
-    print("Fulltext is classified. Are there overflowing tokens above? If so, adjust classify_sentences.")
+
     
     
     summaries["roberta_model"] = roberta_summarize(" ".join(sentences))
@@ -86,24 +89,24 @@ def evaluate_summarization_bias(content_title, research_question, codebook=None,
         distribution_compared = compare_distributions(fulltext_scored, summary_scoreboards)
         results += distribution_compared
         if "(reject H0)" not in distribution_compared: 
-            results += f"\n\nGENERATED A HEATMAP OF THE STATISTICAL SIGNIFICANCE FOR {summary_type}\n"  + generate_chi_square_heatmap(fulltext_scored, summary_scoreboards, name = summary_type + content_title)
+            results += f"\n\nGENERATED A HEATMAP OF THE STATISTICAL SIGNIFICANCE FOR {summary_type}\n"  + generate_chi_square_heatmap(fulltext_scored, summary_scoreboards, name = summary_type + content_id)
     results += f'\n\n~\n' #'change in distribution comparing for original text to abstract summary versus original text to representative sample of quotes:\n\n'
 
     unique_keys = set()
-    # Add keys from fulltext_scored to the set
-    # unique_keys.update(fulltext_scored.keys())  #This will take all categories from main; not just the coded categories
+
+
     # Iterate through each value in summary_scores and add its keys to the set
     for summary_scoreboard in summary_scores.values():
         unique_keys.update(summary_scoreboard.keys())
     # Convert the set of unique keys to a list
     categories = list(unique_keys)
 
-    #results +="\n\n\n" + generate_line_graph(fulltext_scored, comparative_scores, categories, name=content_title)
-    results +="\n\n\n" + line_graph(fulltext_scored, summary_scores, categories, file_name=str(content_title+"percentchangeline"))
-#    results+="\n"+generate_comparative_line_graph(full_codebook_scores, comparative_scores, categories, name="percentage_change_graph.png")
+    results +="\n\n\n" + line_graph(fulltext_scored, summary_scores, categories, file_name=str(content_id+"percentchangeline"), title=name)
+
     print("\n\n\nRESULTS:\n")
     print(results)
     return results
+
 
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 def t5summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 508) -> str:
@@ -233,7 +236,7 @@ def generate_codebook(transcript,NUM_THEMES=5):
         print(f"Theme {i+1}: {' '.join(theme)}")
         
     return [str(" ".join(theme)) for theme in themes] # Best line graph
-def line_graph(full_codebook_scores, scoreboards, categories, file_name="line_graph.png"):
+def line_graph(full_codebook_scores, scoreboards, categories, file_name="line_graph.png",title=""):
     """ 
     Generate a scalable line graph showing the percentage difference for each category across various text types and save it as an image file. 
     Display the average absolute value percentage change for each summary type compared to the full_codebook_scores.
@@ -300,7 +303,7 @@ def line_graph(full_codebook_scores, scoreboards, categories, file_name="line_gr
 """
 
     # Customize the graph
-    plt.title('Thematic Biasses Compared Across Summarization Methods Tested')
+    plt.title(f'Thematic Distribution Across Summarization Methods of {title}')
     plt.xlabel('Text Type')
     plt.ylabel('Percentage Difference')
     plt.xticks(rotation=45, ha='right')  # Rotate text type names for better visibility
@@ -654,17 +657,30 @@ def get_embedding(text):
 
     
 def classify_sentences(text, codebook=["categories","themes","values"], research_question="The statement favors", sentence_embeddings=None):
+    print("len codebook:",len(codebook))
+    if isinstance(codebook[0], tuple):
+        print("\ncodebook is tuples")
+        pos_codebook = [code for (code,_) in codebook]
+        print("len pos_codebook",len(pos_codebook))
+        neg_codebook = [code for (_,code) in codebook]
+        print("len neg_codebook",len(neg_codebook))
+        codebook = pos_codebook
+        codebook.extend(neg_codebook)  
+        print(f"\nnow codebook is type {type(codebook)}\n of length {len(codebook)}" )
+    else:
+        neg_codebook=None
     if isinstance(text,list):
         sentences=text
     elif isinstance(text,str):
         sentences =  [sent.text for sent in nlp(text).sents]
         sentences = [sent for sent in sentences if sent!="" and sent!=" "]
         sentence_embeddings = [get_embedding(sentence) for sentence in sentences] if sentence_embeddings is None else sentence_embeddings
-
+    
     categorized_sentences = {} #{phrase for phrase in codebook}  # Initialize scores 
     for sentence, sentence_embedding in zip(sentences, sentence_embeddings):
         sentence_nsp_scores = {}
         for category in codebook:
+            
              #Prepare text pair for NSP
             hypothesis = f"{category} {research_question}"
 
@@ -681,9 +697,39 @@ def classify_sentences(text, codebook=["categories","themes","values"], research
         categorized_sentences[sentence]= most_favored_category
 
     category_counts = dict(collections.Counter(category for sentence, category in categorized_sentences.items()))
-    sorted_category_counts = dict(sorted(category_counts.items(), key=lambda item: item[1], reverse=True))
 
-    return calculate_percentages(sorted_category_counts)
+    if neg_codebook:
+        # we need to score each category with a positive theme and a negative theme
+        pos_counts = {}
+        neg_counts = {}
+        total_counts = {}
+        counts = []
+        for (category,count) in category_counts.items():
+            if category in neg_codebook:
+
+                neg_counts[category] = count
+            elif category in pos_codebook:
+
+                pos_counts[category] = count
+        for pos_code,neg_code in zip(pos_codebook,neg_codebook):
+            if pos_code not in pos_counts:
+                pos_counts[pos_code] = 0
+            if neg_code not in neg_counts:
+                neg_counts[neg_code] = 0
+            count = pos_counts[pos_code] - neg_counts[neg_code]
+            total_counts[pos_code+'//' + neg_code] = count
+            counts.append(count)
+        # Normalize to positive for chi-square test
+        for code , count in total_counts.items():
+            total_counts[code] = count + min(counts)
+            
+    else:
+        total_counts = category_counts 
+    sorted_total_counts = dict(sorted(total_counts.items(), key=lambda item: item[1], reverse=True))
+
+    return calculate_percentages(sorted_total_counts)
+
+    
  
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -800,18 +846,78 @@ def load_and_preprocess_srt(file_path):
 
 # pip install youtube_transcript_api
 if __name__ == '__main__':
-    video_id = "rgroO4E7Vxc" # C.S.Lewis Psalms 40min
-    video_id = "Ed41paFWSKM" # 60min Parables
-    themes=[
-            "Lament, Expressions of sorrow, grief, and seeking God's intervention.",
-            "Praise, Acknowledgment of God's greatness and goodness.",
-            "Wisdom, Teachings on the righteous path and the nature of the wicked.",
-            "Thanksgiving, Gratitude for God's deliverance and blessings."
-            ]
-    
+
     research_question = "This theme is represented in the passage: "
 
-    out = evaluate_summarization_bias(content_title=video_id, research_question=research_question,codebook=themes)
-    
-        with open(video_id + "model_bias_results.txt", 'w') as f:
+    gospels_codebook = [
+    ("Compassion: Demonstrating care and understanding towards others, acting on the principle of empathy.",
+     "Apathy: Showing a lack of interest or concern for the hardships or suffering of others."),
+    ("Mercy: Exercising forgiveness and leniency towards those who have erred or caused harm.",
+     "Retribution: Advocating for punitive measures as a response to wrongdoing, without consideration for forgiveness."),
+    ("Modesty: Exhibiting humility and a lack of arrogance in one's achievements and interactions with others.",
+     "Arrogance: Displaying an exaggerated sense of one's own importance or abilities, often at the expense of others."),
+    ("Trustworthiness: Being reliable and faithful in one's commitments and responsibilities.",
+     "Skepticism: Exhibiting doubt and a critical questioning of motives, possibly leading to mistrust."),
+    ("Altruism: Prioritizing the welfare of others and engaging in selfless acts of kindness.",
+     "Egoism: Focusing on one's own interests and well-being without regard for the needs of others.")
+]
+
+    video_id = "Ed41paFWSKM" # 60min Parables
+    name="Moral Summaries: \n The Parables of Jesus Christ\n"
+    out=name
+    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook)
+    with open(video_id + "model_bias_results.txt", 'w') as f:
         f.write(out)
+    name="\n\n\n\n\nThe gospels:\n"
+    out+=name
+    video_id = "3UxowslJeTI" # 8 hours of the gospels
+    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook)
+
+    with open(video_id + "model_bias_results.txt", 'w') as f:
+        f.write(out)
+    name="\n\n\n\n\nAesop's Fables:\n"
+    out+=name
+
+
+    aesops_fables_codebook = [
+        ("Prudence: Exhibiting caution and wisdom in decision-making, foreseeing and avoiding unnecessary risks.",
+        "Recklessness: Acting hastily without forethought, leading to avoidable trouble or danger."),
+        ("Ingenuity: Demonstrating cleverness and originality to solve problems or overcome obstacles.",
+        "Simplicity: Lacking complexity or depth in thought, sometimes leading to naive or ineffective actions."),
+        ("Integrity: Adhering to moral and ethical principles, especially honesty and fairness in actions.",
+        "Deceit: Employing dishonesty or trickery for personal gain or to deceive others."),
+        ("Perseverance: Showing steady persistence in a course of action, especially in spite of difficulties or obstacles.",
+        "Indolence: Avoiding activity or exertion; laziness, leading to missed opportunities or failure."),
+        ("Social Harmony: Valuing and working towards the well-being of the community and relationships.",
+        "Selfishness: Placing one's own needs and desires above the welfare of others, disrupting social harmony.")
+    ]
+
+    video_id="aaMLVsH6ikE" #aesops fables 3hr
+    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=aesops_fables_codebook)
+    with open(video_id + "model_bias_results.txt", 'w') as f:
+        f.write(out)
+
+    zen_koans_codebook = [
+        ("Insight: Achieving a deep understanding or realization that transcends conventional thought and logic.",
+        "Confusion: Remaining entangled in intellectual or logical reasoning, missing the essence of Zen."),
+        ("Mindfulness: Maintaining a moment-by-moment awareness of thoughts, feelings, bodily sensations, and the surrounding environment.",
+        "Distraction: Losing focus on the present moment, being caught up in thoughts about the past or future."),
+        ("Simplicity: Embracing the value of living simply and recognizing the essence of reality without unnecessary complexity.",
+        "Complexity: Adding unnecessary layers of thought or material desires that cloud the true nature of reality."),
+        ("Detachment: Letting go of attachments to outcomes, opinions, and the ego, to see the true nature of things.",
+        "Attachment: Clinging to personal desires, opinions, and the ego, which obstructs clear understanding and realization."),
+        ("Non-duality: Recognizing the interconnectedness and oneness of all things, transcending the distinctions between self and other.",
+        "Dualism: Perceiving the world in terms of binary opposites, such as self vs. other, right vs. wrong, which limits understanding of the true nature of reality.")
+    ]
+    name="\n\n\n\n\nZen Koans:\n"
+    out+=name
+
+    video_id= "Y0p663Ot8mo"#zen koans 1hr
+    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=zen_koans_codebook)
+    
+    with open(video_id + "model_bias_results.txt", 'w') as f:
+        f.write(out)
+
+    with open("model_bias_results.txt", 'w') as f:
+        f.write(out)
+    print("model_bias_results.txt")

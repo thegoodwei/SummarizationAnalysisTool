@@ -14,13 +14,14 @@ import gc
 import pandas as pd
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
-# These are used for classification; load them once here:
+# These are used for classification functions called for each model evaluation; load them once at start:
 nlp = spacy.load("en_core_web_lg")
 BERT_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+BERT_tokenizer.add_special_tokens({'pad_token': '[PAD]'})# OR = BERT_tokenizer.eos_token
 BERT_embedding_model = BertModel.from_pretrained('bert-base-uncased')
-BERT_embedding_model.config.pad_token_id
+BERT_embedding_model.config.pad_token_id = BERT_tokenizer.pad_token_id
 BERT_nsp_model = BertForNextSentencePrediction.from_pretrained('bert-base-uncased')
-BERT_nsp_model.config.pad_token_id
+BERT_nsp_model.config.pad_token_id = BERT_tokenizer.pad_token_id
 GPT2_model = GPT2LMHeadModel.from_pretrained("gpt2") 
 GPT2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
@@ -33,10 +34,10 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     for content in content_id if isinstance(content_id,list) else [content_id]:
         content_ids += content_id
         if ".srt" in content:
-            transcript+=" " + load_and_preprocess_srt(content)
+            transcript += " " + load_and_preprocess_srt(content)
         else:    
             srt_dict = YouTubeTranscriptApi.get_transcript(content)
-            transcript += ' '.join(sub['text'] for sub in srt_dict)
+            transcript += ' '.join(sub['text'].replace("[Music]","") for sub in srt_dict)
           
         results += f"Summarize the Moral of the Story: {name}\nPrimary Source: https://youtu.be/{content}\n"
     content_id = content_ids
@@ -46,7 +47,7 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
         for (pos,neg) in codebook:
             pos_codebook.append(pos)
             neg_codebook.append(neg)
-            flat_codebook.extend([pos,neg]) # Keep them in order?
+            flat_codebook.extend([pos,neg]) # Keep them in order
         codebook = flat_codebook
     else:
         pos_codebook = False
@@ -55,95 +56,112 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     max_tokens = total_tokens*summarization_ratio
     results += f"\nTokenln Primary Source: {total_tokens} * Summarization Ratio: {summarization_ratio} = \n Tokenln Per Summary: <{max_tokens}\n\n"
     results += f"Themes for Classification: \n {str(codebook)}\n\n"
-    results += "Models Evaluated: LLAMA-7b-hf, Mistral-7b, phi-2, T5-base, roberta-large, bart-large-cnn, gpt2, agglomerative_clustering, k-means clustering (BERT embeddings) \n"
+    results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7b, phi-2, T5-base, bart-large-cnn, gpt2, roberta_extractive_modeling, Bert_Agglomerative_Clustering, k-Means_Clustering_(all-MiniLM-L6-v2) \n"
     results += "Post-summary grounding algorithm evaluated: K-Means Nearest-Neighbor for each Abstract Summary Sentence to the nearest unique Primary Source Quote sentence"
     print(results)
     summaries = {}
-    
-    # ADD ANY MODEL TO COMPARE, JUST ADD TO SUMMARIES DICT TO BE EVALUATED:
+    sentences =  [sent.text for sent in nlp(transcript).sents if sent.text!=" "]
+    transcript = ". ".join(sentences).strip()
+    print("\n\n\nTranscript:\n"+transcript)
+
+    # ADD MODELS TO SUMMARIES DICT TO BE EVALUATED:
     # ANTHROPIC_KEY = 0#'YOUR_ANTHROPIC_KEY'
     # summaries['claude'] = claude_summarize_text(transcript, max_tokens=max_tokens, ANTHROPIC_KEY=ANTHROPIC_KEY)
     # summary_scores['claude'] = classify_sentences(summaries['claude'], codebook, research_question)
     # OPENAI_APIKEY = ""
     # summaries['gpt4'] = gpt4_summarize_text(transcript, max_tokens=max_tokens, OPENAI_API_KEY=OPENAI_APIKEY)
     # results += "\n\nGPT4 SUMMARY: \n" + summaries['gpt4'] 
-    sentences =  [sent.text for sent in nlp(transcript).sents if sent.text!=" "]
-    transcript = ". ".join(sentences).strip()
 
-
-    summaries["mistral_model"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
-    results += f"\n\n MISTRAL MODEL SUMMARY: \n {summaries['mistral_model']}" 
-    print("Mistral Summary: " + summaries["mistral_model"])
-    print("LEN OF MISTRAL:", len(BERT_tokenizer.tokenize(summaries["mistral_model"])))
-
-
-    summaries["llama_model"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
-    results += "\n\n LLAMA SUMMARY: \n" + summaries['llama_model']
-    print("LLAMA SUMMARY", summaries["llama_model"])
-
+    summaries["roberta_extraction"] = extractive_summary_roberta(transcript, summarization_ratio=summarization_ratio)
+    results += f"\n\n ROBERTA SUMMARY: \n {summaries['roberta_extraction']}"
+    print("Roberta Summary: " + summaries["roberta_extraction"])
+    assert (1<len(summaries['roberta_extraction'].split(" ")))
 
     summaries["phi-2_model"] = phi2_summarize(transcript, summarization_ratio=summarization_ratio)
     results += f"\n\n Phi-2 MODEL SUMMARY: \n {summaries['phi-2_model']}"
     print("Phi2 Summary: " + summaries["phi-2_model"])
-    
-
+    assert (1<len(summaries['phi-2_model'].split(" ")))
     
     summaries['bart_model'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
     results += f"\n\nBART SUMMARY: \n {summaries['bart_model']}" 
     print("Bart Summary: " + summaries["bart_model"])
+    assert (1<len(summaries['bart_model'].split(" ")))
+    
+    summaries["mistral_model"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
+    results += f"\n\n MISTRAL MODEL SUMMARY: \n {summaries['mistral_model']}" 
+    print("Mistral Summary: " + summaries["mistral_model"])
+    print("LEN OF MISTRAL:", len(BERT_tokenizer.tokenize(summaries["mistral_model"])))
+    assert (1<len(summaries['mistral_model'].split(" ")))
 
-    summaries["t5_base"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
-    results += f"\n\nT5_BASE SUMMARY: \n{summaries['t5_base']}"
-    print("T5 Summary", summaries["t5_base"])
+    summaries["llama_model"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
+    results += "\n\n LLAMA SUMMARY: \n" + summaries['llama_model']
+    print("LLAMA SUMMARY", summaries["llama_model"])
+    assert (1<len(summaries['llama_model'].split(" ")))
     
     summaries["gpt2_model"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
     results += f"\n\n GPT2 MODEL SUMMARY: \n {summaries['gpt2_model']}"
     print("GPT2 Summary: " + summaries["gpt2_model"])
-    
-    summaries["roberta_model"] = roberta_summarize(transcript, summarization_ratio=summarization_ratio)
-    results += f"\n\n ROBERTA SUMMARY: \n {summaries['roberta_model']}"
-    print("Roberta Summary: " + summaries["roberta_model"])
+    assert (1<len(summaries['gpt2_model'].split(" ")))
 
-    summaries["agglomerative_clustering"] = agglomerative_sampling(sentences, summarization_ratio=summarization_ratio)
+    summaries["t5_model"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
+    results += f"\n\nT5_BASE SUMMARY: \n{summaries['t5_model']}"
+    print("T5 Summary", summaries["t5_model"])
+    assert (1<len(summaries['t5_model'].split(" ")))
+
+    summaries["agglomerative_clustering"] = agglomerative_sampling(transcript, summarization_ratio=summarization_ratio)
     results += f"\n\nAGGLOMERATIVE CLUSTERING SUMMARY: \n{summaries['agglomerative_clustering']}"     
+    print("Agglomerative Clustering with Bert Embeddings", summaries["agglomerative_clustering"])
+    assert (1<len(summaries['agglomerative_clustering'].split(" ")))
     
-    summaries['kmeans_clustering'] = kmeans_centroid_sampling(sentences, summarization_ratio=summarization_ratio)
+    summaries['kmeans_clustering'] = kmeans_centroid_sampling(transcript, summarization_ratio=summarization_ratio)
     results += f"\n\nK-MEANS CENTROID SENTENCES: \n {summaries['kmeans_clustering']}" 
+    print("K-Means Clustering with all-MiniLM-L6-v2", summaries["agglomerative_clustering"])
+    assert (1<len(summaries['kmeans_clustering'].split(" ")))
     results += "\n\n"
     
     gc.collect()
     sentence_embeddings = [get_embedding(sentence) for sentence in sentences]
+
     print("GENERATING CODEBOOK FROM SUMMARIES")
-    inductive_codebook = generate_codebook(transcript + " ".join([summary for summary in summaries.values()]), NUM_THEMES=5)
-    if codebook is None:
-        codebook = inductive_codebook
-    else:
-        results += f"Inductive Codebook Themes Extracted from All Model's Summaries: {inductive_codebook}\n\n"
+    inductive_codebook = generate_codebook(transcript + ". ".join([summary for summary in summaries.values()]), num_groups=(len(codebook)))
+    print("LEN INDUCTIVE CODEBOOK:", len(inductive_codebook))
+    print("LEN CODEBOOK:", len(codebook))
+    codebook_comp = [" \n'".join(sents)+"'" for sents in ground_to_knn_pairs(codebook, inductive_codebook)]
+    print(len(codebook) == len(inductive_codebook) == len(codebook_comp))
+    assert(len(codebook) == len(inductive_codebook) == len(codebook_comp))
+    results += f"\n\nInductive Codebook Extracted Keywords from All Summaries:\n"
+    for i,code in enumerate(codebook_comp):
+        results += f"Group {i} | {code}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+        print(f"\nINDUCTIVE CODEBOOK GROUP {i} | {code}\n\n")# These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+        
         
     # K-NearestNeighbor post processing to adapt the abstractive summaries into extractive summaries
-    for summary_key in [key for key in summaries.keys() if not key.endswith('clustering')]:
+    for summary_key in [key for key in summaries.keys() if not ('clustering' or 'extract') in key]: #key.endswith('clustering')]:
         # Create grounded summaries for non-knn summaries
-        knn = create_grounded_summary(transcript, summaries[summary_key], sentence_embeddings)
+        knn = ". ".join([extracted_sent for extracted_sent,abstract_sent in ground_to_knn_pairs(transcript, summaries[summary_key], sentence_embeddings)]) + "."
         if knn != summaries[summary_key]:
             knn_key = f'{summary_key}_knn'
             summaries[knn_key] = knn
 
     print("classifying baseline for original text.")
-    fulltext_scored = classify_sentences(sentences, codebook, research_question, sentence_embeddings=sentence_embeddings)
+    fulltext_scored, average_mean_difference = classify_sentences(transcript, codebook, research_question)
+    results+=f"\nMeasuring difference confidence for BERT NSP and GPT2 classification:\nPrimary_Source_Text Average Mean Difference = {average_mean_difference}\n"
     summary_scores = {}
     
     # Classify sentences for all summaries 
     # For each summary algorithm, summarize transcript and create a scoreboard as a list of sentence classification frequencies
     for summary_key, summary_text in summaries.items():
-        summary_scores[summary_key] = classify_sentences(summary_text, codebook, research_question)
+        summary_scores[summary_key], average_mean_difference = classify_sentences(summary_text, codebook, research_question)
+        results+=f"\nMeasuring difference confidence for BERT NSP and GPT2 classification:\n{summary_key} Average Mean Difference = {average_mean_difference}\n"
+
     scored_differences = {}
     results += f"\n\n\n To classify, each BERT sentence embedding compares to a research question and category to predict most likely.\n Research Question:\n {research_question}:"
-    for modelname, summary_scoreboard in summary_scores.items():
+    for summary_key, summary_scoreboard in summary_scores.items():
     #   Compare the distribution of sentence categories applied in the summary to the original source distribution
-        distribution_compared = compare_distributions(fulltext_scored, summary_scoreboard, summary_type = modelname + "_",name=name)
+        distribution_compared = compare_distributions(fulltext_scored, summary_scoreboard, summary_type = summary_key + "_",name=name)
 
         results += distribution_compared
-        scored_differences[modelname] = {category:sumscore-origscore for category,sumscore in summary_scoreboard.items() for theme,origscore in fulltext_scored.items() if (theme==category)}
+        scored_differences[summary_key] = {category:sumscore-origscore for category,sumscore in summary_scoreboard.items() for theme,origscore in fulltext_scored.items() if (theme==category)}
     results += '\n\n' + generate_and_export_table(scored_differences, export_csv_path = str(content_id + "_net_theme_table"))
     results += f'\n\n\n' #'change in distribution comparing for original text to abstract summary versus original text to representative sample of quotes:\n\n'
     # Iterate through each value in summary_scores and add its keys to the set
@@ -168,9 +186,10 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     print("\n\n\nRESULTS:\n")
     print(results)
     return results
+from sklearn.metrics.pairwise import euclidean_distances
 
-from sklearn.feature_extraction.text import TfidfVectorizer 
-def generate_codebook(transcript,NUM_THEMES=5):
+#from sklearn.feature_extraction.text import TfidfVectorizer 
+def generate_codebook(transcript,num_groups=5,n_sentences_per_cluster=3):
     tokenizer = BERT_tokenizer #BertTokenizer.from_pretrained('bert-base-uncased')
     model = BERT_embedding_model #BertModel.from_pretrained('bert-base-uncased')
     
@@ -179,61 +198,97 @@ def generate_codebook(transcript,NUM_THEMES=5):
         sentences = [sent.text for sent in nlp(transcript).sents]
     else:
         sentences=transcript
-   # Tokenize and encode the text data
+        
+    # Tokenize and encode the sentences using BERT.
     inputs = tokenizer(sentences, padding=True, truncation=True, max_length=512, return_tensors="pt")
-
-    # Generate embeddings
+    
+    # Generate sentence embeddings.
     with torch.no_grad():
         outputs = model(**inputs)
-        embeddings = outputs.last_hidden_state[:,  0, :].numpy()
+        embeddings = outputs.last_hidden_state[:, 0, :].numpy()
 
-    # Apply K-means clustering
-    kmeans = KMeans(n_clusters=NUM_THEMES, random_state=0).fit(embeddings)
+    # Apply K-means clustering on the embeddings.
+    kmeans = KMeans(n_clusters=num_groups, random_state=0).fit(embeddings)
 
-    # Identify the most dominant words in each cluster
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X = vectorizer.fit_transform([' '.join(doc.split()) for doc in sentences])
-    word_counts = X.sum(axis=0).flatten()
-    most_common_words = [(word, word_counts[0, idx]) for word, idx in vectorizer.vocabulary_.items()]
-
-    # Sort the words by frequency
-    sorted_words = sorted(most_common_words, key=lambda x: x[1], reverse=True)
-
-    # Extract the themes
-    themes = [[] for _ in range(NUM_THEMES)]
-    for i in range(NUM_THEMES):
-        for j, (word, _) in enumerate(sorted_words):
-                # Ensure the index is within the bounds of kmeans.labels_
-            if j < len(kmeans.labels_) and kmeans.labels_[j] == i:
-                themes[i].append(word)
-
-        # Print the identified themes
-    for i, theme in enumerate(themes):
-        print(f"Theme {i+1}: {' '.join(theme)}")
+    # Initialize a list to hold the key sentences for each cluster.
+    key_sentences = [None] * num_groups
+    
+    # For each cluster, identify the sentences that belong to it and find the closest one to the centroid.
+    for cluster_num in range(num_groups):
+        # Find indices of sentences belonging to the current cluster.
+        cluster_indices = [idx for idx, label in enumerate(kmeans.labels_) if label == cluster_num]
         
-    return [str(" ".join(theme)) for theme in themes] 
+        # Extract the embeddings of sentences in the current cluster.
+        cluster_embeddings = embeddings[cluster_indices]
+        
+        # Calculate the centroid of the current cluster.
+        centroid = kmeans.cluster_centers_[cluster_num]
+        
+        # Calculate distances of all sentences in this cluster from the centroid.
+        distances = euclidean_distances([centroid], cluster_embeddings)
+        
+                    # Find the index (in cluster_embeddings) of the sentence that is closest to the centroid.
+        closest_sentence_idx = distances.argmin()
 
+        # Map this index back to the original sentence index.
+        original_sentence_idx = cluster_indices[closest_sentence_idx]
+        
+        # Set the closest sentence as the key sentence for this cluster.
+        key_sentences[cluster_num] = sentences[original_sentence_idx]
+
+    # Return the key sentences representing each cluster.
+    return key_sentences
+
+
+
+
+
+import math
 ## CLASSIFY CONTENT BY CODEBOOK (generated or provided)
-def chunk_text(text: str, chunk_size: int) -> list[str]:
-# Check if the text length is less than or equal to the chunk size
-    if isinstance(text, list):
-        sents=text
-    else:
-        sents =  [sent.text for sent in nlp(text).sents if sent.text!=" "]
+def chunk_text(text: str, max_chunk_len: int) -> list[str]:
+    all_tokens = BERT_tokenizer.tokenize(text)
+    # Check if the text length is less than or equal to the chunk size
 
-    # Create chunks of text
+    # Initialize variables
+    if len(all_tokens) <= max_chunk_len:
+        return [text]
+
+
+
+    sents =  [sent.text for sent in nlp(text).sents] if isinstance(text,str) else text
+    
+    # Calculate target chunk length 
+    target_num_chunks = math.ceil(len(all_tokens) / max_chunk_len)
+    target_chunk_len = math.ceil(len(all_tokens) / target_num_chunks)
+    curr_chunk_tokens = 0
+    curr_chunk_sents = []
     chunks = []
-    current_chunk = ""
-    for sent in sents:
-        if len(BERT_tokenizer.tokenize(current_chunk)) + len(BERT_tokenizer.tokenize(sent)) + 1 <= chunk_size:
-            current_chunk += " " + sent
-        else:
-            chunks.append(current_chunk.strip())
-            current_chunk = sent
 
-    # Add the last chunk to the list
-    if current_chunk:
-        chunks.append(current_chunk.strip())
+    for i, sent in enumerate(sents):
+        
+        sent_tokens = BERT_tokenizer.tokenize(sent)
+        
+        # Check if adding current sentence would exceed target length
+        if curr_chunk_tokens + len(sent_tokens) > target_chunk_len:
+            if curr_chunk_tokens + len(sent_tokens) < max_chunk_len:
+                # Length with new sent is between target and max chunk 
+                curr_chunk_sents.append(sent)
+                # Add the current chunk with the new sentence, 
+                chunks.append(str(" ".join(curr_chunk_sents)))
+                curr_chunk_sents = []
+                curr_chunk_tokens = 0
+            else:
+                # Length without new sent is between target and max chunk 
+                # Finalize current chunk and add sent to next chunk list
+                chunks.append(" ".join(curr_chunk_sents))
+                # Add unused sentence to next chunk
+                curr_chunk_sents = [sent] 
+                # Reset current chunk token measure
+                curr_chunk_tokens = len(sent_tokens)
+
+    # Add any remaining sentences in final chunk
+    if curr_chunk_sents:
+        chunks.append(" ".join(curr_chunk_sents))
 
     return chunks
 
@@ -243,8 +298,29 @@ def get_embedding(text):
     # Use the pooled output for sentence-level representation
     return outputs.pooler_output.squeeze().detach().numpy()
 
-from scipy.stats import zscore  # For normalization
-def classify_sentences(text, codebook=["categories","themes","values"], research_question="The statement favors", sentence_embeddings=None):
+def normalize(values):
+    """
+    Normalizes a list of numerical values to a range between 0 and 1.
+    
+    Parameters:
+        values (list of float): The list of numerical values to normalize.
+        
+    Returns:
+        list of float: The list of normalized values.
+    """
+    if not values:  # Check if the list is empty
+        return []
+
+    min_value = min(values)
+    max_value = max(values)
+
+    # Avoid division by zero if all values in the list are the same
+    if min_value == max_value:
+        return [0.5 for _ in values]  # or return [1.0 for _ in values] depending on your choice
+
+    # Apply min-max normalization
+    return [(value - min_value) / (max_value - min_value) for value in values]
+def classify_sentences(text, codebook=["categories","themes","values"], research_question="The statement favors", agreement_threshold=.5):
     # Options net_moral_representation and absolute_theme_presence require codebook to be a list of tuples, each containing a positive and negative theme string
     if isinstance(codebook[0], tuple):
             pos_codebook = [code for (code,_) in codebook]
@@ -261,81 +337,70 @@ def classify_sentences(text, codebook=["categories","themes","values"], research
         sentence_nsp_scores = {}
         sentence_nll_scores = {}
         for category in codebook:
-            # Prepare text pair for BERT NSP
-            hypothesis = f"{research_question} {category}"
-            inputs = BERT_tokenizer.encode_plus(hypothesis, sentence, return_tensors='pt', max_length=512, truncation='only_second')
-            # Get BERT NSP score
-            nsp_outputs = BERT_nsp_model(**inputs)
-            nsp_score = nsp_outputs.logits[:,0].detach().numpy()[0]  # Index 0 for 'isNext' label
+            # Concatenate sentence and hypothesis
+            hypothesis = f"{research_question} {category}"  
+            inputs = BERT_tokenizer.encode_plus(sentence, hypothesis, 
+                                            return_tensors='pt', 
+                                            padding='max_length', 
+                                            truncation=True,
+                                            max_length=512)
+                                            
+            # Get NSP scores from model  
+            outputs = BERT_nsp_model(**inputs)
+            logits = outputs.logits
+            
+            # Apply softmax to get probabilities
+            probs = torch.softmax(logits, dim=1)  
+            
+            # Extract probability of 'isNext' class
+            nsp_score = probs[:,0].item()
+            
             sentence_nsp_scores[category] = nsp_score
+            
+
+            ## Prepare text pair for BERT NSP
+            #hypothesis = f"{research_question} {category}"
+            #inputs = BERT_tokenizer.encode_plus(sentence, hypothesis, return_tensors='pt', padding=True, max_length=512, truncation=True)
+            ## Get BERT NSP score
+            #nsp_outputs = BERT_nsp_model(**inputs)
+            #nsp_score = nsp_outputs.logits[:,0].detach().numpy()[0]  # Index 0 for 'isNext' label
+            #sentence_nsp_scores[category] = nsp_score # The higher the better
             # GPT-2 NLL scoring
-            combined_text = f"{research_question} {category}. {sentence}"
+            combined_text = f"{sentence}\n{research_question} {category}. "
             gpt2_inputs = GPT2_tokenizer.encode(combined_text, return_tensors='pt')
             with torch.no_grad():
                 outputs = GPT2_model(gpt2_inputs, labels=gpt2_inputs)
-            nll_score = outputs.loss.item()  # The lower, the better
-            sentence_nll_scores[category] = -nll_score
+                # Apply softmax to get probabilities
+            loss = outputs.loss.item()  # The lower, the better
+#            probs = torch.softmax(loss, dim=1)  
+            sentence_nll_scores[category] = - loss # negative loss , The higher the better
             # Normalize category preferences
-            normalized_nsp_scores = zscore(list(sentence_nsp_scores.values()))
-            normalized_nll_scores = zscore(list(sentence_nll_scores.values()))
+            normalized_nsp_scores = normalize(list(sentence_nsp_scores.values()))
+            normalized_nll_scores = normalize(list(sentence_nll_scores.values()))
             # Calculate the differences for each category
-            score_differences = {category: normalized_nsp - normalized_nll 
+            score_differences = {category: abs(normalized_nsp - normalized_nll) 
                                 for category, normalized_nsp, normalized_nll 
                                 in zip(sentence_nsp_scores.keys(), normalized_nsp_scores, normalized_nll_scores)}
-        mean_diff = abs(np.mean(list(score_differences.values())))
-        avg_mean_difference.append(mean_diff) # find the average mean difference as a measure of avg classification agreement in all sentence:category data
-        sentence_score_differences[sentence]=(mean_diff,score_differences)
-    # If the models agree on category scores for this sentence more than the average sentence, classify it.
+        mean_diff = np.mean([abs(score) for score in score_differences.values()])
+        sentence_score_differences[sentence] = (mean_diff,score_differences)
+        avg_mean_difference.append(mean_diff)
+
+    avg_mean_difference = np.mean(avg_mean_difference)# find the average mean difference as a measure of avg classification agreement in all sentence:category data
+    print("Avg mean diff", avg_mean_difference)
+    # If the models agree on category scores for this sentence more than the average sentence, or above the provided agreement_threshold classify it.
     categorized_sentences = {}  
     for sentence in sentences:
         mean_diff,score_differences = sentence_score_differences[sentence]
-        if mean_diff >= np.mean(avg_mean_difference):
+        if mean_diff <= avg_mean_difference: # agreement threshold will find the average agreement to verify classification of half of the sentences 
             most_favored_category = max(score_differences, key=score_differences.get)
             categorized_sentences[sentence] = most_favored_category
-            print("MeanDiff=",abs(mean_diff))
+            print("MeanDiff=", abs(mean_diff)," \n Sentence: ", sentence, " \n Classified as ", most_favored_category.split(" ")[0])
         else:
-            print("Classification Models Disagree on Best Category, sentence not coded")
+            print("Classification Models Disagree. Classification Skipped for:\n", sentence)
     category_counts = dict(collections.Counter(category for sentence, category in categorized_sentences.items()))
     category_distribution = calculate_percentages(category_counts)
-    return category_distribution
+    return category_distribution, avg_mean_difference
 
-def legacy_classify_sentences(text, codebook=["categories","themes","values"], research_question="The statement favors", sentence_embeddings=None):
-    # Options net_moral_representation and absolute_theme_presence require codebook to be a list of tuples, each containing a positive and negative theme string
-    if isinstance(codebook[0], tuple):
-            pos_codebook = [code for (code,_) in codebook]
-            neg_codebook = [code for (_,code) in codebook]
-            codebook = pos_codebook
-            codebook.extend(neg_codebook)
-    sentences =  [sent.text for sent in nlp(text).sents] if isinstance(text,str) else text
-    sentences = [sent for sent in sentences if sent!="" and sent!=" "]
-    sentence_embeddings = [get_embedding(sentence) for sentence in sentences] if sentence_embeddings is None else sentence_embeddings
-    num_sentences = max(len(sentences),1)
-    print("NUM SENTENCES", num_sentences)
-    categorized_sentences = {} #{phrase for phrase in codebook}  # Initialize scores 
-    for sentence, sentence_embedding in zip(sentences, sentence_embeddings):
-        sentence_nsp_scores = {}
-        for category in codebook:
-            # Prepare text pair for BERT NSP
-            hypothesis = f"{research_question} {category}"
-            inputs = BERT_tokenizer.encode_plus(sentence,hypothesis, return_tensors='pt', max_length=512, truncation='only_second')
-            # Get BERT NSP score
-            nsp_outputs = BERT_nsp_model(**inputs)
-            nsp_score = nsp_outputs.logits[:,0].detach().numpy()[0]  # Index 0 for 'isNext' label
-
-            # GPT-2 NLL scoring
-            combined_text = f"{sentence}\n{research_question} {category}."
-            gpt2_inputs = GPT2_tokenizer.encode(combined_text, return_tensors='pt')
-            with torch.no_grad():
-                outputs = GPT2_model(gpt2_inputs, labels=gpt2_inputs)
-            nll_score = outputs.loss.item()  # The lower, the better
-            sentence_nsp_scores[category] = (nsp_score - nll_score)/2
-
-        most_favored_category = max(sentence_nsp_scores, key=sentence_nsp_scores.get)
-        categorized_sentences[sentence]= most_favored_category
-    category_counts = dict(collections.Counter(category for sentence, category in categorized_sentences.items()))
-    category_distribution = calculate_percentages(category_counts)
-    return category_distribution
-    
 def calculate_theme_ranges(category_distribution, pos_codebook, neg_codebook):
         # we need to score each category with a positive theme and a negative theme
         pos_counts = {}
@@ -343,17 +408,13 @@ def calculate_theme_ranges(category_distribution, pos_codebook, neg_codebook):
         scores= []
         for (category,count) in category_distribution.items():
             scores.append(count)
-            if category in neg_codebook:
+            if any(neg_codebook.keys() in category):
                 neg_counts[category] = count
-            elif category in pos_codebook:
+            elif any(pos_codebook.keys() in category):
                 pos_counts[category] = count
+
         net_themes = {}
-        for pos_code,neg_code in zip(pos_codebook,neg_codebook):
-            if pos_code not in pos_counts:
-                pos_counts[pos_code] = 0
-            if neg_code not in neg_counts:
-                neg_counts[neg_code] = 0
-            
+        for pos_code,neg_code in zip(pos_counts.keys(),neg_counts.keys()):
             # if absolute_theme_presence: #min(counts)<1
             #     total_counts[pos_code + '\n -- \n' + neg_code + '\n\n'] = pos_counts[pos_code] - neg_counts[neg_code] 
             # else:
@@ -374,21 +435,6 @@ def calculate_percentages(counts):
     return percentages
 
 def compare_distributions(orig_dist, summ_dist, summary_type="Summarized", name=""): 
-        polarized_dict = True
-        for key, value in orig_dist.items():
-            if not (isinstance(key, tuple) and isinstance(value,tuple)):
-                polarized_dict = False  # Key is not a tuple of strings to a tuple of numbers
-
-        if polarized_dict:
-    # if you're passing a dict of {category:tuple(str,str)::score:tuple(float,float)}, use this:
-            depolarized_orig = {}
-            depolarized_summ = {}
-            for (pos_theme,neg_theme),(pos,neg) in orig_dist.items():
-                depolarized_orig[pos_theme], depolarized_orig[neg_theme] = pos, neg
-            for (pos_theme,neg_theme),(pos,neg) in depolarized_summ.items():
-                depolarized_summ[pos_theme], depolarized_summ[neg_theme] = pos, neg 
-            orig_dist = depolarized_orig
-            summ_dist = depolarized_orig
         category_diffs=""
         for category in orig_dist.keys():
             orig_pct = orig_dist.get(category, 0)
@@ -482,10 +528,10 @@ def generate_chi_square_heatmap(original_counts, summarized_counts, name="", sum
 ## SUMMARIZE TEXT TO COMPARE MODEL THEME SALIENCE 
 
 from transformers import LlamaForCausalLM, LlamaTokenizer
-def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2650, command="Summary"):
+def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2500, command="Summary"):
     # ! Pip install huggingface-hub
     # $ huggingface-cli login
-    # <token> get your token from huggingface.co
+    # <token> 
     model_name = "meta-llama/Llama-2-7b-chat-hf"
     
     tokenizer = LlamaTokenizer.from_pretrained(model_name)
@@ -497,15 +543,15 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2650, comma
     )
     model = LlamaForCausalLM.from_pretrained( 
             model_name,
-           # quantization_config=bnb_config,
+          #  quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            device_map="cuda",
 
         )
     pipe = pipeline(
         "text-generation",  
         model=model,tokenizer=tokenizer,
-        device_map="auto",
+        device_map="cuda",
         #trust_remote_code=True,
         torch_dtype=torch.bfloat16,  # Quantized bfloat for Mistral to work on consumer hardware
         # early_stopping=True, num_beams=2
@@ -534,7 +580,7 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2650, comma
             chunksum += result
         summary = chunksum
         
-        # loop while summary too long:
+
         input_text = summary
     print(f"OUTPUT LENGTH OF LLAMA: {len(tokenizer.tokenize(summary))}")
 
@@ -553,7 +599,7 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
     # Use the model with the text generation pipeline
    # text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
     gc.collect()
-    #device = "cuda"
+    device = "cuda"
     #model_name = "TheBloke/Mistral-7B-Instruct-v0.1-AWQ"
     
         # Create a bits and bytes config to quantize the 7b parameter models LLAMA and Mistral
@@ -568,9 +614,9 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
             model_name,
-           # quantization_config=bnb_config,
+        #    quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            device_map="cuda",
             trust_remote_code=True,
         )
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -579,12 +625,12 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
         "text-generation",  
         model=model,
         tokenizer=tokenizer,
-        device_map="auto",
+        device_map="cuda",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,  # Quantized bfloat for Mistral to work on consumer hardware
         #early_stopping=True, num_beams=2
     )
-#    pipe.tokenizer.to(device)
+    # pipe.tokenizer.to(device)
     max_summary_len = min((len(BERT_tokenizer.tokenize(text)) * summarization_ratio), 100)
     print("Mixtral to summarize:" )
    # tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -595,7 +641,7 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
         chunksum = ""
         for chunk in chunks:
             prompt = f"Text: {chunk}\n{command}: "
-            #inputs = tokenizer(prompt, return_tensors="pt", max_length=len(prompt), padding='max_length', truncation=True).to(device)
+
             prompt_length=len(BERT_tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
@@ -624,22 +670,23 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
         assert (sumlen < max_summary_len/summarization_ratio)
 
     return text
-
 #!pip install -q -U transformers
 #!pip install -q -U accelerate
 from transformers import pipeline
 
-def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1350, command="Summary"):
+def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1350, command="task: **Rewrite** the above paragraph into a elementary school level textbook section while keeping as much of the lesson as possible"):
     model_name = "microsoft/phi-2"
     gc.collect()
+
     pipe = pipeline(
         "text-generation",  
         model=model_name,
-        device_map="auto",
+        device_map="cuda",
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,  # Quantized phi-2 to work on consumer hardware
+        torch_dtype=torch.bfloat16,  #bfloat16
        # early_stopping=True, num_beams=4,
     )
+
     pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
     pipe.model.config.pad_token_id = pipe.tokenizer.pad_token_id
     max_summary_len = max((len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio),max_chunk_len/2)
@@ -647,37 +694,40 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1350, comma
     sumlen = len(BERT_tokenizer.tokenize(summary))
     print("Phi-2 to summarize from tokenln:", sumlen)
     while max_summary_len < sumlen:
+        starting_len = len(BERT_tokenizer.tokenize(summary))
         chunks = chunk_text(summary, max_chunk_len)
         result = ""
-        for chunk in chunks:
+        for chunk in chunks:# if chunks else [summary]:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
-            prompt = f"Text: {chunk}\n{command}: "
+            prompt = f"{chunk}\n{command}\n "
             prompt_length = len(pipe.tokenizer.tokenize(prompt))
             print("promptlen:", prompt_length)
 
             outputs = pipe(
                 prompt,
                 max_new_tokens = min(max_summary_len,int(prompt_length/2)),
-                #num_beams=2,
                 top_k=50,
+                #num_beams=2,
                 #do_sample=False, # temperature=0.7,
                 #top_p=0.95,
             )
             chunksum = str(" ".join(outputs[0]["generated_text"].split(" ")[len(prompt.split(" ")):]) )
             print(f"chunksumlen: {len(pipe.tokenizer.tokenize(chunksum))}")
+            print(chunksum)
             result += chunksum
-            
             result_length = len(BERT_tokenizer.tokenize(chunksum)) 
             assert(0 < prompt_length - result_length)
         summary = result
         sumlen = len(BERT_tokenizer.tokenize(summary))
-        assert sumlen < len(BERT_tokenizer.tokenize(" ".join(chunks)))
-        print("\n Summary Length:", len(BERT_tokenizer.tokenize(summary)) )
+        print("\n Summary Length:", sumlen)
+        print("\n Starting Length:", starting_len)
+        print("\n Chunked Length:", len(BERT_tokenizer.tokenize("".join(chunks))))
+        assert sumlen < starting_len
 
     return summary
 
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 508,command="Summary") -> str:
+def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 508,command="Summarize") -> str:
         tokenizer=T5Tokenizer.from_pretrained('t5-base')
         model=T5ForConditionalGeneration.from_pretrained('t5-base')
         # Validate input text
@@ -693,10 +743,10 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
         while max_summary_len < len(tokenizer.tokenize(summary)):
             summary_text = ""
             chunks = chunk_text(summary, max_chunk_len)
+
             for chunk in chunks:
                     # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
                 input_text = f"Text: {chunk}\n{command}:"
-
                 # Tokenize the input text
                 input_tokens = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
                 print("T5 chunk len prompt:", len((tokenizer.tokenize(input_text))))
@@ -706,21 +756,23 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
                 # Generate the summary
                 summary_ids = model.generate(
                     input_tokens,
-                    max_length=min(max_summary_len,int(summary_length/2)),
-                    min_length=5,
+                    max_new_tokens=int(summary_length/2),
+                    #max_length=min(max_summary_len,int(summary_length/2)),
+                    min_length=0,
                     length_penalty=2.0,
                     num_beams=4,
                     early_stopping=True
                 )
                 # Decode the summary back to text
-                summary_text += " " + tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+                result = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+                summary_text += " " + result
 
             summary = summary_text
         print("T5 summarylen", len(summary.split()))
         return summary.strip()
 
 import torch
-def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1024, command="Summary"):
+def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=800, command="Summary"):
     """
     Summarizes the given text using the GPT-2 model.
 
@@ -753,7 +805,7 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1024, comma
             #print(f"prompt length: {prompt_length}")
             # Generate summary output
             summary_ids = model.generate(input_ids,
-                                        max_length = min(1024,int(prompt_length*(1.5))), 
+                                        max_length = min(1000,int(prompt_length*(1.5))), 
                                         #do_sample=True,
                                         #temperature=.7,
                                         repetition_penalty=1.2,
@@ -775,7 +827,7 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1024, comma
         summary = chunksum
         sumlen=len(tokenizer.tokenize(summary))
             # Decode and return the summaries
-        print("LEN SUM", len(BERT_tokenizer.tokenize(summary)), "is greater than max target len", max_summary_len)
+        print("LEN SUM", sumlen, "is greater than max target len", max_summary_len)
     return summary
 
 
@@ -786,29 +838,127 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1024, comma
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 import torch
 
-def roberta_summarize(text, summarization_ratio=0.1):
+def extractive_summary_roberta(text, summarization_ratio=0.1):
     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
     model = RobertaForSequenceClassification.from_pretrained('roberta-base')
+
+#    tokenizer = RobertaTokenizer.from_pretrained('roberta-large') 
+#    model = RobertaForSequenceClassification.from_pretrained('roberta-large')
+
     # Split the text into sentences or coherent chunks
+    summary = ""
 
-    chunks = chunk_text(text, 510)  
 
+    print("ROBERTA:")
+    chunks = chunk_text(text, 310)
+    
+    important_chunks = []
+    importance_scores = []
+    for chunk in chunks if chunks else [text]:
+        print("roberta ",chunk)
+        inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True)
+        outputs = model(**inputs)
+        
+        # Assuming the second label corresponds to 'important'
+        probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        importance_score = probabilities[:, 1]  # Assuming index 1 corresponds to 'important'
+        importance_scores.append(importance_score.item())
+
+    # Calculate dynamic threshold based on summarization ratio
+    sorted_scores = sorted(importance_scores, reverse=True)
+    num_top_chunks = int(len(chunks) * summarization_ratio)
+    adaptive_threshold = sorted_scores[num_top_chunks - 1] if num_top_chunks > 0 else min(importance_scores) 
+
+    # Select chunks based on the dynamic threshold
+    selected_chunks = [(score, chunk) for score, chunk in zip(importance_scores, chunks) if score >= adaptive_threshold]
+    bagged_sample = " ".join([(chunk) for score, chunk in zip(importance_scores, chunks) if score >= adaptive_threshold])
+    summary = ""
+    for chunk in chunks: # Put it back in chronological order
+        if chunk in bagged_sample:
+            summary+="\n " + chunk
+    print("ROBERTA SUMMARIZED:")
+    print(summary)
+
+    return summary
+  
+
+    
+    chunks = chunk_text(text, 210)  
     important_chunks = []
     for chunk in chunks:
         inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
         outputs = model(**inputs)
         predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
         # Assuming the 'important' class is labeled as 1
-        if predictions[0][1] > 0.1:  # This threshold can be adjusted
+        if predictions[0][1] > .005:  # This threshold can be adjusted
             important_chunks.append(chunk)
 
     # Concatenate selected chunks to form a summarized content
     summary = ". ".join(important_chunks[:int(len(important_chunks) * summarization_ratio)])
-    print("ROBERTA SUMMARIZED:")
-    print(summary)
     return summary
+def bart_summarize_text(input_text, summarization_ratio=.1):
+    """
+    Summarize the input text using the BART model. Ensure that no content is truncated and 
+    the final summary does not exceed max tokens.
 
-def agglomerative_sampling(sentences: list[str], summarization_ratio=0.2,model=None,subs=None):
+    Args:
+    input_text (str): The input text to summarize.
+    max_tokens (int): The maximum length of the summary.
+
+    Returns:
+    str: The summarized text.
+    """
+    num_output_summary_tokens = len(BERT_tokenizer.tokenize(input_text)) + 1  # Initialize to enter the while loop
+    max_summary_len = int(num_output_summary_tokens * summarization_ratio)
+    # Initialize conditions
+    tokens_per_chunk = 512# 345  # 512 Determine the initial optimal chunk size
+    BART_model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
+    BART_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
+
+    def bart(chunk, max_length=250):
+        """
+        Summarize the input text using the BART model.
+
+        Args:
+        text (str): The input text to summarize.
+        model_name (str): The BART model name.
+        max_tokens (int): The maximum length of the summary.
+
+        Returns:
+        str: The summarized text.
+        """
+        inputs = BART_tokenizer(chunk, return_tensors='pt', truncation=True, padding="max_length")
+        summary_ids = BART_model.generate(inputs.input_ids, num_beams=4, max_new_tokens=max_length/2, min_length=0, early_stopping=True)
+        summary = BART_tokenizer.decode(summary_ids[0], skip_special_tokens=True) 
+        return summary
+
+    current_text = input_text  # Initialize current_text to be the input_text
+    max_tokens = tokens_per_chunk - 1 if tokens_per_chunk > max_summary_len else max_summary_len# make the loop condition smaller than attention window
+    while num_output_summary_tokens > max_tokens:
+        print(num_output_summary_tokens)
+        # We chunk the current text (initially the input text, later could be the summary of the input text)
+        chunks = chunk_text(current_text, tokens_per_chunk)
+
+        # Summarize each chunk
+        chunk_summaries = [bart(chunk) for chunk in chunks if len(chunk)>5]
+        gc.collect()
+        # Combine the chunk summaries
+        current_text = ' '.join(chunk_summaries).strip()
+
+        # Update the number of tokens in the current text (which is the total summary at this point)
+        num_output_summary_tokens = len(BART_tokenizer.tokenize(current_text))
+        
+        # If the total summary length is within the limit, we break the loop, else we continue
+        # The already summarized text (current_text) will be re-summarized in the next iteration if necessary
+        # This way, we are always summarizing symmetrically, maintaining the context as much as possible
+    gc.collect()
+    return current_text
+
+    # Return the final summary text, which is now guaranteed to be within the max_tokens limit
+
+def agglomerative_sampling(original_text, summarization_ratio=0.2,model=None,subs=None):
+        sentences = chunk_text(original_text, 100)
+
         if subs is not None:
             sub_time_text_list = [(i, subtitle.start.total_seconds(), subtitle.end.total_seconds(), subtitle.content) for i, subtitle in enumerate(subs)]
             i=""
@@ -878,9 +1028,52 @@ def agglomerative_sampling(sentences: list[str], summarization_ratio=0.2,model=N
         except:
         #    logging.warning(f"AVERTED: ValueError: The number of observations cannot be determined on an empty distance matrix.")
             return "".join(clean_sentences)
-# Example usage:
-# categories = list(set(fulltext_scored.keys()).union(*[scores.keys() for scores in comparative_scores.values()]))
-# generate_percentage_change_graph(full_codebook_scores, comparative_scores, categories, "percentage_change_graph.png")
+
+
+# Normalize the abstractive summary to the original text quotes
+from sklearn.neighbors import NearestNeighbors
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
+import numpy as np
+
+def kmeans_centroid_sampling(original_text, summarization_ratio=.10):
+    # Step 1: Preprocess the text to split it into sentences
+
+    sentences = chunk_text(original_text, 100)
+    # Step 2: Generate Sentence Embeddings
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = model.encode(sentences)
+
+    # Step 3: Apply K-Means Clustering
+    n_clusters = max(1, int(len(sentences) * summarization_ratio))
+    print("kmeans")
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings)
+    print(".predict")
+    # Step 4: Assign sentences to clusters
+    sentence_clusters = kmeans.predict(embeddings)
+    print("SUCCESSFUL KMEANS, clusters:", n_clusters)
+
+    # Step 5: Find the representative sentence for each cluster
+    # Initialize a dictionary to store the representative sentence for each cluster
+    representative_sentences = {}
+    for cluster_id in range(n_clusters):
+        # Filter sentences belonging to the current cluster
+        cluster_sentences = [sent for sent, cluster in zip(sentences, sentence_clusters) if cluster == cluster_id]
+        
+        # Compute distances to the cluster center for the current cluster's sentences
+        cluster_center = kmeans.cluster_centers_[cluster_id]
+        cluster_distances = np.linalg.norm(embeddings[[sentences.index(sent) for sent in cluster_sentences]] - cluster_center, axis=1)
+        
+        # Select the sentence with the smallest distance to the cluster center
+        closest_sentence_index = np.argmin(cluster_distances)
+        representative_sentences[cluster_id] = cluster_sentences[closest_sentence_index]
+
+    # Step 6: Form the summary by sorting the representative sentences by their original positions
+    # Sort the representative sentences by their indices in the original text
+    sorted_sentences = sorted(representative_sentences.values(), key=lambda x: sentences.index(x))
+    summary = " ".join(sorted_sentences)
+
+    return summary
 
 from textwrap import wrap
 import anthropic
@@ -970,121 +1163,8 @@ def gpt4_summarize_text(input_text, max_tokens=32000, OPENAI_API_KEY="YOUR_OPENA
     # Return the final summary text, which is now guaranteed to be within the max_tokens limit
     return current_text
 
-def bart_summarize_text(input_text, summarization_ratio=.1):
-    """
-    Summarize the input text using the BART model. Ensure that no content is truncated and 
-    the final summary does not exceed max tokens.
 
-    Args:
-    input_text (str): The input text to summarize.
-    max_tokens (int): The maximum length of the summary.
-
-    Returns:
-    str: The summarized text.
-    """
-    max_summary_len = len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio
-    gc.collect()
-    # Initialize conditions
-    num_output_summary_tokens = max_summary_len + 1  # Initialize to enter the while loop
-    tokens_per_chunk = 512  # 512 Determine the initial optimal chunk size
-    BART_model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
-    BART_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
-
-    def bart(chunk, max_length=250):
-        """
-        Summarize the input text using the BART model.
-
-        Args:
-        text (str): The input text to summarize.
-        model_name (str): The BART model name.
-        max_tokens (int): The maximum length of the summary.
-
-        Returns:
-        str: The summarized text.
-        """
-        inputs = BART_tokenizer(chunk, return_tensors='pt', truncation=True, padding="max_length")
-        summary_ids = BART_model.generate(inputs.input_ids, num_beams=4, max_length=max_length, min_length=0, early_stopping=True)
-        summary = BART_tokenizer.decode(summary_ids[0], skip_special_tokens=True) 
-        return summary
-
-    current_text = input_text  # Initialize current_text to be the input_text
-    max_tokens = tokens_per_chunk - 1 if tokens_per_chunk > max_summary_len else max_summary_len# make the loop condition smaller than attention window
-    while num_output_summary_tokens > max_tokens:
-        print(num_output_summary_tokens)
-        # We chunk the current text (initially the input text, later could be the summary of the input text)
-        chunks = chunk_text(current_text, tokens_per_chunk)
-
-        # Summarize each chunk
-        chunk_summaries = [bart(chunk) for chunk in chunks if len(chunk)>5]
-        gc.collect()
-        # Combine the chunk summaries
-        current_text = ' '.join(chunk_summaries).strip()
-
-        # Update the number of tokens in the current text (which is the total summary at this point)
-        num_output_summary_tokens = len(BART_tokenizer.tokenize(current_text))
-        
-        # If the total summary length is within the limit, we break the loop, else we continue
-        # The already summarized text (current_text) will be re-summarized in the next iteration if necessary
-        # This way, we are always summarizing symmetrically, maintaining the context as much as possible
-
-    # Return the final summary text, which is now guaranteed to be within the max_tokens limit
-
-    return current_text
-
-# Normalize the abstractive summary to the original text quotes
-from sklearn.neighbors import NearestNeighbors
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import KMeans
-import numpy as np
-
-def kmeans_centroid_sampling(original_text, summarization_ratio=.10):
-    # Step 1: Preprocess the text to split it into sentences
-    # Assuming original_text is a string, you would typically use a library like NLTK to split it into sentences
-    # For simplicity, let's assume sentences is a list of sentences
-    print("USING KMEANS CENTROID")
-    if isinstance(original_text,list):
-        sentences = original_text
-    else:
-        sentences = [sent.text for sent in nlp(original_text).sents]
-
-
-    # Step 2: Generate Sentence Embeddings
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(sentences)
-
-    # Step 3: Apply K-Means Clustering
-    n_clusters = max(2, int(len(sentences) * summarization_ratio))
-    print("kmeans")
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings)
-    print(".predict")
-    # Step 4: Assign sentences to clusters
-    sentence_clusters = kmeans.predict(embeddings)
-    print("SUCCESSFUL KMEANS, clusters:", n_clusters)
-
-    # Step 5: Find the representative sentence for each cluster
-    # Initialize a dictionary to store the representative sentence for each cluster
-    representative_sentences = {}
-    for cluster_id in range(n_clusters):
-        # Filter sentences belonging to the current cluster
-        cluster_sentences = [sent for sent, cluster in zip(sentences, sentence_clusters) if cluster == cluster_id]
-        
-        # Compute distances to the cluster center for the current cluster's sentences
-        cluster_center = kmeans.cluster_centers_[cluster_id]
-        cluster_distances = np.linalg.norm(embeddings[[sentences.index(sent) for sent in cluster_sentences]] - cluster_center, axis=1)
-        
-        # Select the sentence with the smallest distance to the cluster center
-        closest_sentence_index = np.argmin(cluster_distances)
-        representative_sentences[cluster_id] = cluster_sentences[closest_sentence_index]
-
-    # Step 6: Form the summary by sorting the representative sentences by their original positions
-    # Sort the representative sentences by their indices in the original text
-    sorted_sentences = sorted(representative_sentences.values(), key=lambda x: sentences.index(x))
-    summary = " ".join(sorted_sentences)
-
-    return summary
-
-
-def create_grounded_summary(original_text, summarized_text, original_text_sentence_embeddings=None):
+def ground_to_knn_pairs(original, comparison, original_text_sentence_embeddings=None):
     """
     Ground each sentence of the summarized text to the closest original subtitle.
     
@@ -1095,53 +1175,42 @@ def create_grounded_summary(original_text, summarized_text, original_text_senten
     Returns:
     List[str]: A list of ground-truth normalized sentences.
     """
+    original =  [sent.text for sent in nlp(original).sents] if isinstance(original,str) else original
+    comparison =  [sent.text for sent in nlp(comparison).sents] if isinstance(comparison,str) else comparison
+
+    assert(len(original) >= len(comparison))
     if original_text_sentence_embeddings:
         original_embeddings=original_text_sentence_embeddings
     else:
-        original_embeddings = [get_embedding(sent) for sent in original_sentences]
-    if isinstance(original_text,str):
-        original_sentences =  [sent.text for sent in nlp(original_text).sents]
-    else: 
-        original_sentences=original_text
+        original_embeddings = [get_embedding(sent) for sent in original]
+    comparable_embeddings = [ get_embedding(sent) for sent in comparison]
+# Initialize NearestNeighbors with n_neighbors set to the length of the original list.
+    # This ensures we have enough neighbors to find unique matches.
+    nbrs = NearestNeighbors(n_neighbors=len(original), metric='cosine').fit(original_embeddings)
 
-    summarized_sentences =  [sent.text for sent in nlp(summarized_text).sents]
-    summarized_embeddings = [ get_embedding(sent) for sent in summarized_sentences]
-
-    gc.collect()
-    # Nearest Neighbor Search
-    nbrs = NearestNeighbors(n_neighbors=1, metric='cosine').fit(original_embeddings)
-
+    # Prepare the list to store the pairs and a set to track used original sentences.
     grounded_sentences = []
-    available_indices = set(range(len(original_sentences)))  # Set of indices of available sentences
+    available_indices = set(range(len(original)))  # All original indices are initially available.
 
-    for summarized_embedding in summarized_embeddings:
-        # Initialize a variable to track if a match has been found
-        match_found = False
-        
-        while not match_found:
-            # Find the nearest neighbor among all sentences, ignoring availability for now
-            distances, indices = nbrs.kneighbors([summarized_embedding])
-            
-            for index in indices[0]:
-                if index in available_indices:
-                    # Found an available match
-                    grounded_sentences.append(original_sentences[index])
-                    available_indices.remove(index)
-                    match_found = True
-                    break  # Exit the for loop once a match is found
-            
-            # If no available match was found in this iteration, break the while loop to avoid infinite loop
-            if not match_found:
-                break
+    # Find nearest neighbors for each sentence in the comparison list.
+    distances, indices = nbrs.kneighbors(comparable_embeddings)
 
-    return ". ".join(grounded_sentences).strip() + "."
+    # Iterate through each set of neighbors found for each sentence in comparison.
+    for comp_idx, neighbor_indices in enumerate(indices):
+        # Go through the list of neighbors for the current comparable sentence.
+        for neighbor_index in neighbor_indices:
+            if neighbor_index in available_indices:
+                # If this neighbor hasn't been used yet, create a pair.
+                grounded_sentences.append((original[neighbor_index], comparison[comp_idx]))
+                # Remove the index from available indices and break out of the loop.
+                available_indices.remove(neighbor_index)
+                break  # Move on to the next comparable sentence once a pair is made.
 
+    # Return the list of unique nearest neighbor pairs.
+    return grounded_sentences
 
 
 ## VISUALIZE THE DATA
-
-
-
 
 import matplotlib.pyplot as plt
 
@@ -1398,7 +1467,7 @@ def model_dif_scatterplot(full_codebook_scores, scoreboards, categories, file_na
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')  # Place the legend outside the plot
     file_name = file_name + ".png" if ".png" not in file_name else file_name
     plt.savefig(file_name, format='png', dpi=300, bbox_inches='tight')
-    #plt.show()
+    plt.show()
     return file_name
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 from sklearn.metrics import calinski_harabasz_score
@@ -1416,7 +1485,7 @@ def load_and_preprocess_srt(file_path):
 
 if __name__ == '__main__':
 
-    research_question = "The theme of the passage above is"
+    research_question = "This passage represents a theme of  "
     videos=[]
     codebooks = []
     gospels_codebook = [
@@ -1489,15 +1558,14 @@ if __name__ == '__main__':
         ("Harmony: Working together for common goals, promoting peace and cooperative strength.",
         "Conflict: Disagreements or discord that fracture community unity and hinder collective progress.")
     ]    
-    
-    name = "The TEST OF TEST"
-    video_id = "gqtmUHhaplo" # 12min Yannic Kilcher "https://www.youtube.com/watch?v=gqtmUHhaplo \n"
-    out = '\n\n\n\n\n'+name + "\n"
 
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=unified_moral_codebook)
-    
-    input("TEST PASSED?")
-    
+
+    name = "The Allegory of the Cave" #TEST 6 minute video
+    video_id = "OFylXQRbolM" #  "https://www.youtube.com/watch?v=OFylXQRbolM \n"
+    out = '\n\n\n\n\n'+name + "\n"
+    videos.append(video_id)
+    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook)
+
     name = "The Parables of Jesus Christ"
     video_id = "Ed41paFWSKM" # 60min Parables "https://www.youtube.com/watch?v=Ed41paFWSKM \n"
     out = '\n\n\n\n\n'+name + "\n"
@@ -1505,9 +1573,10 @@ if __name__ == '__main__':
     out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook)
     with open(name.replace(" ", "").strip() + "_model_moralsum_results.txt", 'w') as f:
         f.write(out)
-    print(video_id + "model_moralsum_results.txt")
-    
-    
+    print(video_id + "_model_moralsum_results.txt")
+
+    gc.collect()
+
     name = "The Gospels of Matthew, Mark, Luke, & John"
     out += '\n\n\n\n\n'+name+"\n"
     video_id = "3UxowslJeTI" # 8 hours of the gospels  "https://youtu.be/3UxowslJeTI \n"
@@ -1516,6 +1585,7 @@ if __name__ == '__main__':
     with open(name.replace(" ", "").replace(",","").replace("&","").strip() + "_model_moralsum_results.txt", 'w') as f:
         f.write(out)
     print(video_id + "model_bias_results.txt")
+
     gc.collect()
 
     name = "Plato's Republic \n"
@@ -1525,18 +1595,18 @@ if __name__ == '__main__':
     out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=platos_republic_codebook, summarization_ratio=1/20)
     with open(video_id + "model_bias_results.txt", 'w') as f:
         f.write(out)
-    print(video_id + "model_bias_results.txt")
+    print(video_id + "_model_moralsum_results.txt")
+
     gc.collect()
 
     name = "Aesop's Fables"
     out += '\n\n\n\n\n'+name+"\n"
-
     video_id = "aaMLVsH6ikE" #aesops fables 3hr   "https://youtu.be/aaMLVsH6ikE \n"
     out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=aesops_fables_codebook, summarization_ratio=1/15)
-
+    videos.append(video_id)
     with open(name.replace(" ", "").replace(",","").strip() + "_model_bias_results.txt", 'w') as f:
         f.write(out)
-    print(video_id + "model_bias_results.txt")
+    print(video_id + "_model_moralsum_results.txt")
 
     gc.collect()
 
@@ -1547,8 +1617,8 @@ if __name__ == '__main__':
     out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=zen_koans_codebook)
     with open(video_id + "model_bias_results.txt", 'w') as f:
         f.write(out)
-    print(video_id + "model_bias_results.txt")
-        
+    print(video_id + "_model_moralsum_results.txt")
+
     gc.collect()
 
     name = "The Fables of the Panchatantra"
@@ -1558,7 +1628,8 @@ if __name__ == '__main__':
     videos.append(video_id)    
     with open(name.replace(" ", "").strip() + "_model_moralsum_results.txt", 'w') as f:
         f.write(out)
-    print(video_id + "model_bias_results.txt")
+    print(video_id + "_model_moralsum_results.txt")
+
     gc.collect()
     
     name = "Full Catalog of Parables, Gospels, Koans, Allegories, and Fables"
@@ -1566,5 +1637,4 @@ if __name__ == '__main__':
         
     with open("cumulative_model_moralsum_results.txt", 'w') as f:
         f.write(out)
-    print("cumulative_model_bias_results.txt")
-
+    print("cumulative_model_moralsum_results.txt")

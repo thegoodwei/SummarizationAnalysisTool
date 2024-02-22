@@ -28,7 +28,7 @@ BERT_nsp_model.config.pad_token_id = BERT_tokenizer.pad_token_id
 GPT2_model = GPT2LMHeadModel.from_pretrained("gpt2") 
 GPT2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
-def evaluate_summarization_bias(name, content_id, research_question, codebook=None,summarization_ratio=1/10):
+def evaluate_summarization_bias(name, content_id, research_question, codebook=None,summarization_ratio=1/10,use_ensemble_summary=True):
     # Content can be either Youtube video id or .srt file path
     results = ""
     transcript = ""
@@ -55,20 +55,23 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     else:
         pos_codebook = False
 
-
     summary_scores = {}
     total_tokens = len(BERT_tokenizer.tokenize(transcript))
     max_tokens = total_tokens*summarization_ratio
+
     results += f"\nTokenln Primary Source: {total_tokens} * Summarization Ratio: {summarization_ratio} = \n Tokenln Per Summary: <{max_tokens}\n\n"
     results += f"Themes for Classification: \n {str(codebook)}\n\n"
     results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7b, phi-2, T5-base, bart-large-cnn, gpt2, roberta, and all-MiniLM-L6-v2 for Agglomerative_Clustering and for k-Means_Clustering \n"
     results += "Post-summary grounding with K-Means Nearest-Neighbor (KNN) applied to each Abstract Summary Sentence for the nearest unique Primary Source Quote sentence"
+
     print(results)
     summaries = {}
     sentences =  [sent.text for sent in nlp(transcript).sents if sent.text != " "]
     transcript = ". ".join(sentences).strip().replace(". .",". ").replace("..",". ").strip()
     print("\n\n\nTranscript:\n"+transcript)
     print("\n\n\n\n\n\n\n Classifying: original text theme distribution baseline.")
+
+
     primary_text_themes, average_mean_difference = classify_sentences(transcript, codebook, research_question)
     primary_base_scores = get_category_distribution(primary_text_themes, codebook)
     results += f"\nMeasuring difference confidence for BERT NSP and GPT2 classification of the primary source:\n Average Mean Difference for these themes/text = {average_mean_difference}\n"
@@ -83,66 +86,67 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     # OPENAI_APIKEY = ""
     # summaries['gpt4'] = gpt4_summarize_text(transcript, max_tokens=max_tokens, OPENAI_API_KEY=OPENAI_APIKEY)
     # results += "\n\nGPT4 SUMMARY: \n" + summaries['gpt4'] 
-    
-
-    summaries["GPT2_summary"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
-
-    summaries["Phi-2_summary"] = phi2_summarize(transcript, summarization_ratio=summarization_ratio)
-
-    summaries['Bart-large_summary'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
-
-    summaries["Mistral_7b_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
 
     summaries["Llama_7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["Roberta-base_nllcentroids"] = extractive_summary_roberta(transcript, summarization_ratio=summarization_ratio)
+    summaries["Mistral_7b_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["T5-base_summary"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
+    summaries["Phi-2_summary"] = phi2_summarize(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["all-MiniLM-L6-v2_Agglomerative"] = agglomerative_sampling(transcript, summarization_ratio=summarization_ratio)
+    summaries["GPT2_summary"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
+
+    summaries["t5-base_summary"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
+
+    summaries["Roberta-large_nll"] = extractive_summary_nll(transcript, summarization_ratio=summarization_ratio)
+
+    summaries['Bart-large_summary'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
+
+    summaries["bert-base_Kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(summarization_ratio*len(sentences)))).replace(". .",". ").replace("..",".")
 
     summaries['all-MiniLM-L6-v2_Kmeans'] = kmeans_centroid_sampling(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["bert-base_kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(summarization_ratio*len(sentences)))).replace(". .",". ").replace("..",".")
+    summaries["all-MiniLM-L6-v2_Agglomerative"] = agglomerative_sampling(transcript, summarization_ratio=summarization_ratio)
 
     gc.collect()
     sentence_embeddings = [get_embedding(sentence) for sentence in sentences]
     ensemble = ""
     gc.collect()
 
+    if use_ensemble_summary:
+        # Ground the ensemble to the primary source with k-nearest-neighbors
+        knn_summaries={}
+        for summary_key in [key for key in summaries.keys()]: #key.endswith('clustering')]:
+            ensemble += summaries[summary_key] + ". "
+            knn_extracted_sents = ""
+            if 'summary' in summary_key: # Skip the grounding of clustered embeddings, they're already extracts of the primary source quotes
+                # Create grounded summaries for non-knn summaries
+                knn_extracted_sents,abstract_sents = ground_to_knn_pairs(transcript, summaries[summary_key], sentence_embeddings)
+                knn_summaries[summary_key] = ". ".join(knn_extracted_sents).replace(". .",". ").replace("..",". ").strip()
+                ensemble += ". ".join(knn_extracted_sents) + ". " 
 
-    # Ground the ensemble to the primary source with k-nearest-neighbors
-    knn_summaries={}
-    for summary_key in [key for key in summaries.keys()]: #key.endswith('clustering')]:
-        ensemble += summaries[summary_key] + ". "
-        knn_extracted_sents = ""
-        if 'summary' in summary_key: # Skip the grounding of clustered embeddings, they're already extracts of the primary source quotes
-            # Create grounded summaries for non-knn summaries
-            knn_extracted_sents,abstract_sents = ground_to_knn_pairs(transcript, summaries[summary_key], sentence_embeddings)
-            knn_summaries[summary_key] = ". ".join(knn_extracted_sents).replace(". .",". ").replace("..",". ").strip()
-            ensemble += ". ".join(knn_extracted_sents) + ". " 
+            # This works to generate sample quotes from each model, slightly redundant calculations if classification was first priority over model bias.
+            # when dealing with classification for the study data we can store the scoreboard dicts in a database with mean-diff on ensemble codebook classifications, enabling you to remove this logic and pull the sentences from vector db relating to each theme.
+            print("Top Coded Sentences from", summary_key)
+            representative_sentences = bert_kcentroid_quotes(". ".join([summaries[summary_key], ". ".join(knn_extracted_sents)]).replace(". .",". "), num_quotes=(len(codebook)))
+            categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
+            categorized_quotes,_ = classify_sentences(quotes,categories, research_question) # second value returned is the codebook:quote dict
 
-        print("Top Coded Sentences from", summary_key)
-        representative_sentences = bert_kcentroid_quotes(". ".join([summaries[summary_key], ". ".join(knn_extracted_sents)]).replace(". .",". "), num_quotes=(len(codebook)))
+            results += f"\n\n{summary_key}'s Best Theme Classifications:\n"
+            for i,(quote,category) in enumerate(categorized_quotes.items()):
+                result = f"    {i+1} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+                results += result
+                print(result) # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+        summaries.update(knn_summaries)
+        summaries['Ensemble'] = ensemble
+        results += f"\n\n Best Theme Classifications for the Ensemble (all models):\n"
+        representative_sentences = bert_kcentroid_quotes(summaries['Ensemble'].replace(". .",". "), num_quotes=(len(codebook)))
         categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
-        categorized_quotes,_ = classify_sentences(quotes,categories, research_question) # second value returned is the codebook:quote dict
+        categorized_quotes,_ = classify_sentences(quotes,categories, research_question) 
 
-        results += f"\n\n{summary_key}'s Best Theme Classifications:\n"
         for i,(quote,category) in enumerate(categorized_quotes.items()):
-            result = f"    {i+1} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
-            results += result
-            print(result) # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
-
-    summaries['Ensemble'] = ensemble
-    results += f"\n\n Best Theme Classifications for the Ensemble (all models):\n"
-    representative_sentences = bert_kcentroid_quotes(summaries['Ensemble'].replace(". .",". "), num_quotes=(len(codebook)))
-    categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
-    categorized_quotes,_ = classify_sentences(quotes,categories, research_question) 
-
-    for i,(quote,category) in enumerate(categorized_quotes.items()):
-        category_result = f"    Ensemble Theme {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
-        print(category_result)
-        results += category_result
+            category_result = f"    Ensemble Theme {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+            print(category_result)
+            results += category_result
 
     summary_scores = {}
     # For each summary algorithm, summarize transcript and create a scoreboard as a list of sentence classification frequencies
@@ -153,10 +157,10 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
             results += f"\n\nMeasured confidence for BERT NSP and GPT2 nll classification:\n{summary_key} Average Mean Difference = {average_mean_difference} (lower is better)\nTheme Scores:"
             results += str(summary_scores[summary_key])
 
+
 #   Compare the distribution of sentence categories applied in the summary to the original source distribution
     for summary_key, summary_scoreboard in summary_scores.items():
         results += compare_distributions(primary_base_scores, summary_scoreboard, summary_type = summary_key + "_",name=name)
-
 
     # Print summaries onto results txt after we have already found the best representative sentences for the codebook and outlined the data
     results += "\n\n\n\n\nMODEL SUMMARIES TO AUDIT:"
@@ -166,7 +170,7 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
 
 
     
-    heatmapfile,csvfile = str(generate_comparison_heatmap(primary_base_scores,summary_scores,name=name))
+    heatmapfile,csvfile = generate_comparison_heatmap(primary_base_scores,summary_scores,name=name)
     results += f"{heatmapfile}\n{csvfile}\n"
     results += theme_span_linegraph(primary_base_scores, summary_scores, file_name = f"{name}_theme_evaluation", title=name) +"\n"
     results += model_dif_scatterplot(primary_base_scores, summary_scores, file_name = f"{name}_model_mean-diff_scatterplot", title=name) +"\n"
@@ -405,7 +409,7 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2500, comma
     pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
     pipe.model.config.pad_token_id = pipe.tokenizer.pad_token_id
  
-    max_summary_len = max((len(tokenizer.tokenize(input_text)) * summarization_ratio), max_chunk_len/2)
+    max_summary_len = max((len(tokenizer.tokenize(input_text)) * summarization_ratio), 50)
     summary = input_text
 
     print(f"INPUT TO LLAMA: len{len(tokenizer.tokenize(input_text))}")
@@ -570,7 +574,7 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=2000, comma
     return summary.strip().replace(". .",". ").replace("..",". ")
 
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 502,command="Summarize") -> str:
+def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 306,command="Summarize") -> str:
         tokenizer=T5Tokenizer.from_pretrained('t5-base')
         model=T5ForConditionalGeneration.from_pretrained('t5-base')
         # Validate input text
@@ -594,13 +598,13 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
                 input_tokens = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
                 print("T5 chunk len prompt:", len((tokenizer.tokenize(input_text))))
                 # Calculate the desired number of new tokens for the summary based on the summarization ratio and chunk length
-                summary_length = int(max(len(input_tokens[0]),.5)) * summarization_ratio # Summarize by no less than .5 each time for higher fidelity
+                promptlen =  len(input_tokens[0]) # Summarize by no less than .5 each time for higher fidelity
 
                 # Generate the summary
                 summary_ids = model.generate(
                     input_tokens,
-                    max_new_tokens=int(summary_length),
-                    #max_length=min(max_summary_len,int(summary_length/2)),
+                    #max_length=500, #int(promptlen*1.5),
+                    max_new_tokens=200,#min(max_summary_len,int(summary_length/2)),
                     min_length=0,
                     length_penalty=2.0,
                     num_beams=4,
@@ -675,9 +679,9 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=600, comman
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 import torch
 
-def extractive_summary_roberta(text, summarization_ratio=0.1):
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-    model = RobertaForSequenceClassification.from_pretrained('roberta-base')
+def extractive_summary_nll(text, summarization_ratio=0.1, model = None, tokenizer = None):
+    tokenizer = RobertaTokenizer.from_pretrained('roberta-large') if tokenizer is None else tokenizer
+    model = RobertaForSequenceClassification.from_pretrained('roberta-large') if model is None else model
 
 #    tokenizer = RobertaTokenizer.from_pretrained('roberta-large') 
 #    model = RobertaForSequenceClassification.from_pretrained('roberta-large')
@@ -783,16 +787,8 @@ def bart_summarize_text(input_text, summarization_ratio=.1):
 
     # Return the final summary text, which is now guaranteed to be within the max_tokens limit
 
-def agglomerative_sampling(original_text, summarization_ratio=0.2,subs=None):
+def agglomerative_sampling(original_text, summarization_ratio=0.2 ):
         sentences = chunk_sents_from_text(original_text, 100)
-
-        if subs is not None:
-            sub_time_text_list = [(i, subtitle.start.total_seconds(), subtitle.end.total_seconds(), subtitle.content) for i, subtitle in enumerate(subs)]
-            i=""
-            formatted_strings_from_subtitles = [f"{i}: [{start:.2f} - {end:.2f}] {text}" for i, start, end, text in sub_time_text_list]
-            formatted_strings_from_subtitles = [f"{i}:  {text}  - [{end:.2f}]" for i, start, end, text in sub_time_text_list]
-            sentences = formatted_strings_from_subtitles
-
 
         sentences = [s for s in list(OrderedDict.fromkeys(sentences)) if s]
         clean_sentences = []
@@ -807,7 +803,7 @@ def agglomerative_sampling(original_text, summarization_ratio=0.2,subs=None):
             clean_sentences.append(' '.join(clean_words))
 
 
-        model = SentenceTransformer('all-MiniLM-L6-v2') 
+        model = SentenceTransformer('all-MiniLM-L6-v2')  
         
         sentence_embeddings = [model.encode(sentence) for sentence in clean_sentences]
 
@@ -848,10 +844,6 @@ def agglomerative_sampling(original_text, summarization_ratio=0.2,subs=None):
         summary = '. '.join(chronological_summary).strip().replace("..",". ").replace(". .",". ")
 
         return summary
-        #except:
-        #    logging.warning(f"AVERTED: ValueError: The number of observations cannot be determined on an empty distance matrix.")
-        #    return ". ".join(clean_sentences).replace("..",".")
-
 
 # Normalize the abstractive summary to the original text quotes
 from sklearn.neighbors import NearestNeighbors
@@ -1081,12 +1073,12 @@ def generate_comparison_heatmap(full_codebook_scores, scoreboards, name=""):
     heatmap_file_name = f'{file_name}_theme_representation_heatmap.png'
     plt.savefig(heatmap_file_name, dpi=300)
     plt.close()  # Close the plot to prevent it from displaying inline if undesired
-
     # Convert the differences matrix to a DataFrame for saving as CSV
     differences_df = pd.DataFrame(differences_matrix, index=all_models, columns=all_themes)
-    csv_file_name = f'{name}_theme_representation_differences.csv'
+    csv_file_name = f'{file_name}_theme_representation_differences.csv'
     differences_df.to_csv(csv_file_name)
     return heatmap_file_name, csv_file_name
+
 
 
 def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_graph.png", title=""):
@@ -1104,7 +1096,7 @@ def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_grap
         return pos - orig_pos, neg - orig_neg
 
     # Setup figure and axes
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, ax = plt.subplots(figsize=(14, 12))
 
     # Determine the number of models and categories for plotting
     n_categories = len(categories)
@@ -1135,14 +1127,15 @@ def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_grap
 
     # Customize the plot
     ax.set_xlabel('Model')
-    ax.set_ylabel('Change in Net Theme Values after Summarization ∆(pos - neg)')
-    ax.set_title(title)
+    ax.set_ylabel('∆(pos - neg) Story Moral Representation  \n  Change in modeled occurrences of positive theme minus negative theme')
+    # ax.set_title(title)
     ax.set_xticks(indices + bar_width * (n_categories / 2))
     ax.set_xticklabels(model_names)
-    ax.legend(title="Category", loc='upper left', bbox_to_anchor=(1, 1))
+   # ax.legend(title="Category", loc='upper left', bbox_to_anchor=(1, 1))
+    ax.legend(title=f"Amplitude of Net Moral Value Bias in LLM Distillation of {title} \n", loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=1)
     ax.grid(True, which='major', axis='y', linestyle='--')
     plt.xticks(rotation=45, ha='right')  # Rotate text type names for better visibility
-    
+
     plt.tight_layout()
 #    plt.savefig(file_name)
     plt.show()
@@ -1538,13 +1531,14 @@ if __name__ == '__main__':
     video_id = "OFylXQRbolM" #  "https://www.youtube.com/watch?v=OFylXQRbolM \n"
     out = name + "\n"
     videos.append(video_id)
-    #out = evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2)
+    #out = evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2, use_ensemble_summary=False) # Don't use the ensemble model when testing the graphing functions!
     name = name.replace(" ", "").replace(":","").strip() + "_model_moralsum_results.txt" 
     with open(name, 'w') as f:
         f.write(out)
     print("name of file output:", name)
 
-
+    gc.collect()
+    torch.cuda.empty_cache()
 
     name = "The Parables of Jesus Christ"
     video_id = "Ed41paFWSKM" # 60min Parables "https://www.youtube.com/watch?v=Ed41paFWSKM \n"
@@ -1556,6 +1550,7 @@ if __name__ == '__main__':
     print(video_id + "model_moralsum_results.txt")
 
     gc.collect()
+    torch.cuda.empty_cache()
 
     name = "The Gospels of Matthew, Mark, Luke, & John"
     out = name + "\n"
@@ -1567,6 +1562,7 @@ if __name__ == '__main__':
     print(video_id + "_model_moralsum_results.txt")
 
     gc.collect()
+    torch.cuda.empty_cache()
 
     name = "Plato's Republic \n"
     out = name + "\n"

@@ -17,6 +17,11 @@ import gc
 import math
 import re
 
+# for pulling text data from the internet
+import requests
+from bs4 import BeautifulSoup
+
+
 # These are used for classification functions called for each model evaluation; load them once at start:
 nlp = spacy.load("en_core_web_lg")
 BERT_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -28,21 +33,40 @@ BERT_nsp_model.config.pad_token_id = BERT_tokenizer.pad_token_id
 GPT2_model = GPT2LMHeadModel.from_pretrained("gpt2") 
 GPT2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
-def evaluate_summarization_bias(name, content_id, research_question, codebook=None,summarization_ratio=1/10,use_ensemble_summary=True):
+def analyze_summarization_effects(name, content_id, research_question, codebook=None,summarization_ratio=.02,use_ensemble_summary=True):
     # Content can be either Youtube video id or .srt file path
-    results = ""
-    transcript = ""
-
+    results = "" 
+    transcript = "" 
     if not isinstance(content_id,list):
         content_id = [content_id]
     for content in content_id:
+        if "https://" in content:
+            try:
+                print("Downloading data to summarize")
+                response = requests.get(content)
+                response.raise_for_status()  # Raises an HTTPError if the HTTP request returned an unsuccessful status code
+                soup = BeautifulSoup(response.content, 'html.parser')
+                transcript += soup.get_text()
+            except requests.RequestException as e:
+                print(f"An error occurred: {e}")
+                transcript = None
 
-        if ".srt" in content:
+        elif ".srt"  in content:
+            print("SRT FILE?", content)
+            results += f"Summarize the Moral of the Story: {name}\nPrimary Source:{content}"
             transcript += " " + load_and_preprocess_srt(content)
-        else:    
+        elif ".txt" in content:
+            print("TXT FILE?", content)
+            results += f"Summarize the Moral of the Story: {name}\nPrimary Source:{content}"
+            with open(content, 'r') as f:
+                transcript += f.read()
+                print("Got text from text file")
+        elif len(content.split())<100:    #Try as if its a youtube video id
+            results += f"Summarize the Moral of the Story: {name}\nPrimary Source: https://youtu.be/{content}\n"
             srt_dict = YouTubeTranscriptApi.get_transcript(content)
             transcript += ' '.join(sub['text'].replace("[Music]","") for sub in srt_dict)
-        results += f"Summarize the Moral of the Story: {name}\nPrimary Source: https://youtu.be/{content}\n"
+        else:
+            transcript = content
     content_id = "".join(content_id)
     if codebook and isinstance(codebook[0], tuple):
         pos_codebook, neg_codebook  = [], []
@@ -61,7 +85,7 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
 
     results += f"\nTokenln Primary Source: {total_tokens} * Summarization Ratio: {summarization_ratio} = \n Tokenln Per Summary: <{max_tokens}\n\n"
     results += f"Themes for Classification: \n {str(codebook)}\n\n"
-    results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7b, phi-2, T5-base, bart-large-cnn, gpt2, roberta, and all-MiniLM-L6-v2 for Agglomerative_Clustering and for k-Means_Clustering \n"
+    results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7B-Instruct-v0.2, phi-2, T5-base, bart-large-cnn, gpt2, roberta, and all-MiniLM-L6-v2 for Agglomerative_Clustering and for k-Means_Clustering \n"
     results += "Post-summary grounding with K-Means Nearest-Neighbor (KNN) applied to each Abstract Summary Sentence for the nearest unique Primary Source Quote sentence"
 
     print(results)
@@ -69,84 +93,109 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
     sentences =  [sent.text for sent in nlp(transcript).sents if sent.text != " "]
     transcript = ". ".join(sentences).strip().replace(". .",". ").replace("..",". ").strip()
     print("\n\n\nTranscript:\n"+transcript)
-    print("\n\n\n\n\n\n\n Classifying: original text theme distribution baseline.")
 
 
-    primary_text_themes, average_mean_difference = classify_sentences(transcript, codebook, research_question)
-    primary_base_scores = get_category_distribution(primary_text_themes, codebook)
-    results += f"\nMeasuring difference confidence for BERT NSP and GPT2 classification of the primary source:\n Average Mean Difference for these themes/text = {average_mean_difference}\n"
-    
-    results += "\n\n Percentage of classified sentences distributed by theme:\n"
-    results += "\n".join([f"{score:.1f}  | {category} " for category,score in primary_base_scores.items()]) + "\n\n"
+    # TO EVALUATE MORE MODELS: ADD THE MODEL SUMMARIES TO THE DICT LIKE THIS:
 
-    # ADD MODELS TO SUMMARIES DICT TO BE EVALUATED:
-    # ANTHROPIC_KEY = 0#'YOUR_ANTHROPIC_KEY'
+    # ANTHROPIC_KEY = 'YOUR_ANTHROPIC_KEY'
     # summaries['claude'] = claude_summarize_text(transcript, max_tokens=max_tokens, ANTHROPIC_KEY=ANTHROPIC_KEY)
-    # summary_scores['claude'] = classify_sentences(summaries['claude'], codebook, research_question)
-    # OPENAI_APIKEY = ""
+
+    # OPENAI_APIKEY = "YOUR_OPENAI_KEY"
     # summaries['gpt4'] = gpt4_summarize_text(transcript, max_tokens=max_tokens, OPENAI_API_KEY=OPENAI_APIKEY)
-    # results += "\n\nGPT4 SUMMARY: \n" + summaries['gpt4'] 
 
-    summaries["Llama_7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
+    # Requires more space than currently available
 
-    summaries["Mistral_7b_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
+    summaries["Gemma-2b-it"] = gemma_summarize(transcript, summarization_ratio=summarization_ratio)
+
+    summaries["Llama-2-7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
+
+    summaries["Mistral-7B-Instruct-v0.2_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
 
     summaries["Phi-2_summary"] = phi2_summarize(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["GPT2_summary"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
+    summaries['bart-large-cnn_summary'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
 
     summaries["t5-base_summary"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
 
+    summaries["GPT2_summary"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
+
+
     summaries["Roberta-large_nll"] = extractive_summary_nll(transcript, summarization_ratio=summarization_ratio)
 
-    summaries['Bart-large_summary'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
 
-    summaries["bert-base_Kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(summarization_ratio*len(sentences)))).replace(". .",". ").replace("..",".")
+    summaries["bert-base_Kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(min(1,summarization_ratio*len(sentences))))).replace(". .",". ").replace("..",".")
+
 
     summaries['all-MiniLM-L6-v2_Kmeans'] = kmeans_centroid_sampling(transcript, summarization_ratio=summarization_ratio)
 
+
     summaries["all-MiniLM-L6-v2_Agglomerative"] = agglomerative_sampling(transcript, summarization_ratio=summarization_ratio)
 
-    gc.collect()
+    
     sentence_embeddings = [get_embedding(sentence) for sentence in sentences]
-    ensemble = ""
-    gc.collect()
+    
+    primary_text_themes, average_mean_difference = classify_sentences(transcript, codebook, research_question)
+    primary_theme_scores = get_category_distribution(primary_text_themes, codebook)
+
+    results += f"\nMeasuring difference confidence for BERT NSP and GPT2 classification of the primary source:\n Average Mean Difference for these themes/text = {average_mean_difference}\n"
+    results += "\n\n Percentage of classified sentences distributed by theme:\n"
+    results += "\n".join([f"{score:.1f}  | {category} " for category,score in primary_theme_scores.items()]) + "\n\n"
+    
+    summaries['Ensemble (abstract summaries)'] = "" #abstract_ensemble
+    summaries['Ensemble (extract summaries)'] = "" #extract_ensemble 
 
     if use_ensemble_summary:
         # Ground the ensemble to the primary source with k-nearest-neighbors
-        knn_summaries={}
+        knn_summaries = {}
         for summary_key in [key for key in summaries.keys()]: #key.endswith('clustering')]:
-            ensemble += summaries[summary_key] + ". "
-            knn_extracted_sents = ""
+
             if 'summary' in summary_key: # Skip the grounding of clustered embeddings, they're already extracts of the primary source quotes
-                # Create grounded summaries for non-knn summaries
+                # Create extract summaries for non-knn summaries
+                summaries['Ensemble (abstract summaries)'] += summaries[summary_key] + ". "
+
                 knn_extracted_sents,abstract_sents = ground_to_knn_pairs(transcript, summaries[summary_key], sentence_embeddings)
                 knn_summaries[summary_key] = ". ".join(knn_extracted_sents).replace(". .",". ").replace("..",". ").strip()
-                ensemble += ". ".join(knn_extracted_sents) + ". " 
-
+                summaries['Ensemble (extract summaries)'] += ". ".join(knn_extracted_sents) + ". " 
+#                except:
+#                    print("Unable to ground summary:", summary_key)
+#                    print("ValueError: Expected n_neighbors <= n_samples,  but n_samples = n, n_neighbors = n+1")
+            else:
+                summaries['Ensemble (extract summaries)'] += summaries[summary_key] + ". "
             # This works to generate sample quotes from each model, slightly redundant calculations if classification was first priority over model bias.
             # when dealing with classification for the study data we can store the scoreboard dicts in a database with mean-diff on ensemble codebook classifications, enabling you to remove this logic and pull the sentences from vector db relating to each theme.
             print("Top Coded Sentences from", summary_key)
             representative_sentences = bert_kcentroid_quotes(". ".join([summaries[summary_key], ". ".join(knn_extracted_sents)]).replace(". .",". "), num_quotes=(len(codebook)))
             categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
-            categorized_quotes,_ = classify_sentences(quotes,categories, research_question) # second value returned is the codebook:quote dict
+            categorized_quotes,mean_diff = classify_sentences(quotes,categories, research_question) # second value returned is the codebook:quote dict
 
-            results += f"\n\n{summary_key}'s Best Theme Classifications:\n"
+            results += f"\n\nThemes of {summary_key}'s Summary have an Average Mean Difference of {mean_diff}\n"
             for i,(quote,category) in enumerate(categorized_quotes.items()):
-                result = f"    {i+1} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+                result = f"    {i+1} | {category.split(':')[0]} \n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
                 results += result
                 print(result) # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
-        summaries.update(knn_summaries)
-        summaries['Ensemble'] = ensemble
-        results += f"\n\n Best Theme Classifications for the Ensemble (all models):\n"
-        representative_sentences = bert_kcentroid_quotes(summaries['Ensemble'].replace(". .",". "), num_quotes=(len(codebook)))
-        categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
-        categorized_quotes,_ = classify_sentences(quotes,categories, research_question) 
 
-        for i,(quote,category) in enumerate(categorized_quotes.items()):
-            category_result = f"    Ensemble Theme {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+        results += f"\n\n Best Theme Classifications for the Ensemble (all models):\n"
+        abstractive_ensemblesum_summary = bert_kcentroid_quotes(summaries['Ensemble (abstract_summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
+        
+        categories, summary = ground_to_knn_pairs(codebook, abstractive_ensemblesum_summary)
+        abstract_ensemble_themes_quotes,_ = classify_sentences(summary,categories, research_question) 
+        
+        extractive_ensemblesum_quotes = bert_kcentroid_quotes(summaries['Ensemble (extract_summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
+        
+        categories, quotes = ground_to_knn_pairs(codebook, extractive_ensemblesum_quotes)
+        extract_ensemble_theme_quotes,_ = classify_sentences(quotes,categories, research_question) 
+
+        for i,(quote,category) in enumerate(abstract_ensemble_themes_quotes.items()):
+            category_result = f"    Abstractive Ensemble Summary Themes: {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
             print(category_result)
             results += category_result
+
+        for i,(quote) in enumerate(extract_ensemble_theme_quotes):
+            category_result = f"    Extract Ensemble Quote Themes: {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+            print(category_result)
+            results += category_result
+
+
 
     summary_scores = {}
     # For each summary algorithm, summarize transcript and create a scoreboard as a list of sentence classification frequencies
@@ -157,28 +206,29 @@ def evaluate_summarization_bias(name, content_id, research_question, codebook=No
             results += f"\n\nMeasured confidence for BERT NSP and GPT2 nll classification:\n{summary_key} Average Mean Difference = {average_mean_difference} (lower is better)\nTheme Scores:"
             results += str(summary_scores[summary_key])
 
-
+    scored_differences={}
 #   Compare the distribution of sentence categories applied in the summary to the original source distribution
     for summary_key, summary_scoreboard in summary_scores.items():
-        results += compare_distributions(primary_base_scores, summary_scoreboard, summary_type = summary_key + "_",name=name)
+        results += compare_distributions(primary_theme_scores, summary_scoreboard, summary_type = summary_key, name=name)
+        scored_differences[summary_key] = {category:sumscore-origscore for category,sumscore in summary_scoreboard.items() for theme,origscore in primary_theme_scores.items()}
 
     # Print summaries onto results txt after we have already found the best representative sentences for the codebook and outlined the data
     results += "\n\n\n\n\nMODEL SUMMARIES TO AUDIT:"
     for model,summary in summaries.items():
         results += f"\n\nSummary of {name} from {model}\n{summary}" #if model != "Ensemble" else ""
+        
     results += f'\n\n\n\n\nGraphing the change in theme distributions across models:\n\n'
 
-
+    heatmapfile,csvfile = generate_heatmap(scored_differences,name=name)
     
-    heatmapfile,csvfile = generate_comparison_heatmap(primary_base_scores,summary_scores,name=name)
-    results += f"{heatmapfile}\n{csvfile}\n"
-    results += theme_span_linegraph(primary_base_scores, summary_scores, file_name = f"{name}_theme_evaluation", title=name) +"\n"
-    results += model_dif_scatterplot(primary_base_scores, summary_scores, file_name = f"{name}_model_mean-diff_scatterplot", title=name) +"\n"
+    results += f"Table:\n{csvfile}\n\n{heatmapfile}\n"
+    results += theme_span_linegraph(primary_theme_scores, summary_scores, file_name = f"{name}_theme_evaluation", title=name) +"\n"
+    results += model_dif_scatterplot(primary_theme_scores, summary_scores, file_name = f"{name}_model_mean-diff_scatterplot", title=name) +"\n"
     # Graph the net polarity of themes, score each positive theme minus each negative theme to determine polarity of summary theme representation
     if pos_codebook: 
         print(pos_codebook,neg_codebook)
         print(summary_score for key,summary_score in summary_scores.items())
-        fulltext_score_ranges = calculate_theme_ranges(primary_base_scores, pos_codebook, neg_codebook)
+        fulltext_score_ranges = calculate_theme_ranges(primary_theme_scores, pos_codebook, neg_codebook)
         scoreboard_ranges = {key:calculate_theme_ranges(summary_score, pos_codebook, neg_codebook) for key, summary_score in summary_scores.items()}
 
         categories = [key for key in fulltext_score_ranges.keys()]
@@ -377,7 +427,7 @@ def calculate_theme_ranges(category_distribution, pos_codebook, neg_codebook):
 
 
 from transformers import LlamaForCausalLM, LlamaTokenizer
-def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2500, command="Task: Rewrite the above content in clear concise language to explain the moral of the story."):
+def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2600, command="Task: Briefly Summarize the lesson of the story as a concise summary paragraph"):
     # ! Pip install huggingface-hub
     # $ huggingface-cli login
     # <token> 
@@ -414,30 +464,31 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2500, comma
 
     print(f"INPUT TO LLAMA: len{len(tokenizer.tokenize(input_text))}")
     while max_summary_len < len(tokenizer.tokenize(summary)):
-        chunks = chunk_sents_from_text(input_text, max_chunk_len)
+        chunks = chunk_sents_from_text(summary, max_chunk_len)
+        print(f"Llama has {len(chunks)} chunks")
         chunksum=""
         for chunk in chunks:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
-            prompt = f"Summary: {chunk}\n{command}:"
+            prompt = f"{chunk} ```{command}```:"
             prompt_length = len(tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
                 max_new_tokens = min(max_summary_len,int(prompt_length/2)),
                # num_beams=4,
             )
-            result = str((outputs[0]["generated_text"]) )
-            result = " ".join( result.split(" ")[len(prompt.split(" ")):] ) if prompt in result else result
-            chunksum += result + ". "
+            result = str((outputs[0]["generated_text"]) ) 
+            result = result.split(prompt)[1] if prompt in result else result
+            chunksum += result.strip() + ". "
             print(result)
-        summary = chunksum 
+        summary = chunksum.strip()
 
-        input_text = summary
+
     print(f"OUTPUT OF LLAMA: len{len(tokenizer.tokenize(summary))}")
 
-    return summary.strip().replace("..",". ").replace(". .",". ")
+    return summary.strip().replace("..",". ").replace(". .",". ").strip()
 # !pip install autoawq
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="Task: Rewrite the above text in concise language, unpack the lessons of the story."):
+def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="Task: Summarize the lessons of the story as a concise tl;dr summary paragraph"):
 #    model_name = "mistralai/Mistral-7B-Instruct-v0.1"
     #tokenizer = AutoTokenizer.from_pretrained(modelname)
     #model = AutoModelForCausalLM.from_pretrained(modelname).to(device)
@@ -463,7 +514,6 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
 
     
     model_name = "mistralai/Mistral-7B-Instruct-v0.2"
-    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -471,6 +521,7 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
             torch_dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=True,
+
         )
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
@@ -487,13 +538,15 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
     max_summary_len = min((len(BERT_tokenizer.tokenize(text)) * summarization_ratio), 100)
    # tokenizer.pad_token_id = tokenizer.eos_token_id
     sumlen=len(BERT_tokenizer.tokenize(text))
-    print("Mixtral to summarize: len",sumlen )
+    summary=text
+    print("Mixtral to summarize: len",sumlen, " tokens" )
     while max_summary_len < sumlen :
-        chunks = chunk_sents_from_text(text, max_chunk_len)
+        chunks = chunk_sents_from_text(summary, max_chunk_len)
+        print(f"Mistral has {len(chunks)} chunks of apx{max_chunk_len} tokens to summarize")
 
         chunksum = ""
         for chunk in chunks:
-            prompt = f"Text: {chunk}\n{command}\nSummary: "
+            prompt = f"Text: {chunk} ```{command}```: "
 
             prompt_length=len(BERT_tokenizer.tokenize(prompt))
             outputs = pipe(
@@ -503,35 +556,29 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
                 top_k=50,
             #   min_length=10
             #   top_p=0.95,
+
             )
             result = str((outputs[0]["generated_text"]) )
-            result = " ".join( result.split(" ")[len(prompt.split(" ")):] ) if prompt in result else result
-
-
-
-
+            result = result.split(prompt)[1] if prompt in result else result
             print(result)
-            result_length = len(BERT_tokenizer.tokenize(result))
 
             chunksum += result + ". "
-            assert(prompt_length > result_length)
-        text = chunksum
-        sumlen = len(BERT_tokenizer.tokenize(text))
+
+        summary = chunksum
+        sumlen = len(BERT_tokenizer.tokenize(summary))
         print("Mixtral Summary: len", sumlen)
-        assert (sumlen < max_summary_len/summarization_ratio)
 
     return text.strip().replace("..",". ").replace(". .",". ")
 
 from transformers import pipeline
-def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=2000, command="task: **Rewrite** the above paragraph as a reading section of an elementary school textbook, maintain the key lessons of the story."):
-    
+def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, command="task: **Summarize** the key lesssons of the story above in the format of a conclusion paragraph for an elementary school textbook"):
     model_name = "microsoft/phi-2"
     pipe = pipeline(
         "text-generation",  
         model=model_name,
         device_map="cuda",
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,  #bfloat16
+        torch_dtype=torch.bfloat16,  
        # early_stopping=True, num_beams=4,
     )
     pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
@@ -544,22 +591,25 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=2000, comma
         starting_len = len(BERT_tokenizer.tokenize(summary))
         chunks = chunk_sents_from_text(summary, max_chunk_len)
         chunksum = ""
+        print(f"Phi2 has {len(chunks)} chunks")
         for chunk in chunks:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
-            prompt = f"{chunk}\n{command}\nsummary: "
+            prompt = f"{chunk} | {command}: "
             prompt_length = len(pipe.tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
                 max_new_tokens = int(prompt_length/2),
                 #max_length = int(prompt_length/2),
-                top_k=40, # Lower value filters a focused interpretation of the text
-                top_p=0.2, # lower values provide more focused and determistic generation
+                top_k=50, # Lower value filters a focused interpretation of the text
+                top_p=0.8, # lower values provide more focused and determistic generation, too low becomes a parrot, higher values are more diverse
                 #num_beams = 4, 
                 #early_stopping=True
+                no_repeat_ngram_size=6,
                 do_sample=True,
-                temperature=0.01,
+                temperature=0.2, # Prevent parroting loops, still somewhat deterministic
             )
-            result = str(" ".join(outputs[0]["generated_text"].split(" ")[len(prompt.split(" ")):]) )
+            outputs = outputs[0]["generated_text"]
+            result = outputs.split(prompt)[1] if prompt in outputs else outputs
             print(result)
             chunksum +=  result + ". "
             #print(f"chunksumlen: {len(pipe.tokenizer.tokenize(chunksum))}")
@@ -570,11 +620,71 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=2000, comma
         print("\n Phi-2 Summary: len", sumlen)
         #print("\n Starting Length:", starting_len)
         #print("\n Chunked Length:", len(BERT_tokenizer.tokenize("".join(chunks))))
-        assert sumlen < starting_len
+
+    return summary.strip().replace(". .",". ").replace("..",". ")
+
+
+
+
+
+#from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from transformers import AutoTokenizer, GemmaForCausalLM
+def gemma_summarize(input_text, summarization_ratio=.1, max_chunk_len=5400, command="Summarize"):
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b-it")
+    model = GemmaForCausalLM.from_pretrained("google/gemma-2b-it")
+    model_name = "google/gemma-7b-it"
+
+    pipe = pipeline(
+        "text-generation",  
+        model=model_name,
+        device_map="cuda",
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,  
+       # early_stopping=True, num_beams=4,
+    )
+    pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
+    pipe.model.config.pad_token_id = pipe.tokenizer.pad_token_id
+    max_summary_len = max((len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio),max_chunk_len/2)
+    summary = input_text
+    sumlen = len(BERT_tokenizer.tokenize(summary))
+    print("Phi-2 to summarize: len", sumlen)
+    while max_summary_len < sumlen:
+        starting_len = len(BERT_tokenizer.tokenize(summary))
+        chunks = chunk_sents_from_text(summary, max_chunk_len)
+        chunksum = ""
+        print(f"Phi2 has {len(chunks)} chunks")
+        for chunk in chunks:
+            # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
+            prompt = f"{chunk} | {command}: "
+            prompt_length = len(pipe.tokenizer.tokenize(prompt))
+            outputs = pipe(
+                prompt,
+                max_new_tokens = min(8192 - (prompt_length), 4000),
+                #max_length = int(prompt_length/2),
+                top_k=50, # Lower value filters a focused interpretation of the text
+                top_p=0.8, # lower values provide more focused and determistic generation, too low becomes a parrot, higher values are more diverse
+                no_repeat_ngram_size=6,
+                do_sample=True,
+                temperature=0.2,
+            )
+            outputs = outputs[0]["generated_text"]
+            result = outputs.split(prompt)[1] if prompt in outputs else outputs
+            print(result)
+            chunksum +=  result + ". "
+            #print(f"chunksumlen: {len(pipe.tokenizer.tokenize(chunksum))}")
+            result_length = len(BERT_tokenizer.tokenize(chunksum)) 
+            #print(f"phi2 prompt len {prompt_length} \n phi2 result len {result_length}")
+        summary = result
+        sumlen = len(BERT_tokenizer.tokenize(summary))
+        print("\n Phi-2 Summary: len", sumlen)
+        #print("\n Starting Length:", starting_len)
+        #print("\n Chunked Length:", len(BERT_tokenizer.tokenize("".join(chunks))))
+
     return summary.strip().replace(". .",". ").replace("..",". ")
 
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 306,command="Summarize") -> str:
+def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 306,command="Summarize:") -> str:
         tokenizer=T5Tokenizer.from_pretrained('t5-base')
         model=T5ForConditionalGeneration.from_pretrained('t5-base')
         # Validate input text
@@ -590,6 +700,7 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
         while max_summary_len < len(tokenizer.tokenize(summary)):
             summary_text = ""
             chunks = chunk_sents_from_text(summary, max_chunk_len)
+            print(f"T5 has {len(chunks)} chunks")
 
             for chunk in chunks:
                     # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
@@ -598,7 +709,7 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
                 input_tokens = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
                 print("T5 chunk len prompt:", len((tokenizer.tokenize(input_text))))
                 # Calculate the desired number of new tokens for the summary based on the summarization ratio and chunk length
-                promptlen =  len(input_tokens[0]) # Summarize by no less than .5 each time for higher fidelity
+                #promptlen =  len(input_tokens[0]) # Summarize by no less than .5 each time for higher fidelity
 
                 # Generate the summary
                 summary_ids = model.generate(
@@ -606,9 +717,10 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
                     #max_length=500, #int(promptlen*1.5),
                     max_new_tokens=200,#min(max_summary_len,int(summary_length/2)),
                     min_length=0,
-                    length_penalty=2.0,
+                    length_penalty=5.0,
                     num_beams=4,
-                    early_stopping=True
+                    early_stopping=True,
+                    no_repeat_ngram_size=5,
                 )
                 # Decode the summary back to text
                 result = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
@@ -618,8 +730,7 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
         print("T5 Summary: len", len(summary.split()))
         return summary.strip().replace(". .",".").replace("..",". ")
 
-import torch
-def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=600, command="Summarize"):
+def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=900, command="In Summary:"):
     """
     Summarizes the given text using the GPT-2 model.
 
@@ -638,44 +749,46 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=600, comman
     max_summary_len = max((len(tokenizer.tokenize(input_text)) * summarization_ratio), max_chunk_len)
     summary = input_text
     sumlen=len(tokenizer.tokenize(summary))
+    iterations=0
     print("GPT2 to summarize: len", sumlen)
-    while max_summary_len < sumlen:
-        chunks = chunk_sents_from_text(input_text, max_chunk_len)
-        chunksum=""
 
+    while max_summary_len < sumlen and iterations<5:
+        chunks = chunk_sents_from_text(summary, max_chunk_len)
+        iterations +=1
+        chunksum = ""
+        print(f"GPT2 has {len(chunks)} chunks")
         for chunk in chunks:
-          prompt = f"Text:{chunk}.\n{command}:"
-
+          prompt = f"{chunk} | {command}:"
           if len(tokenizer.tokenize(chunk)) > 10:
             input_ids = tokenizer.encode(prompt, return_tensors='pt', add_special_tokens=True, padding=True)
             prompt_length=len(tokenizer.tokenize(prompt))
-            #print(f"prompt length: {prompt_length}")
             # Generate summary output
+            input_ids = input_ids[:, :max_chunk_len] #1024 max token length includes completion
             summary_ids = model.generate(input_ids,
-                                        max_new_tokens = min(1000,int(max_chunk_len*.5),int((prompt_length*(.5)))), 
-                                        #do_sample=True,
+                                        max_new_tokens = 1024 - max_chunk_len, 
+                                        do_sample=True,
                                         #temperature=.7,
                                         repetition_penalty=2.0,
                                         num_beams=4,
-                                        length_penalty=2.0, 
+                                        length_penalty=12.0, 
                                         num_return_sequences=1, 
                                         early_stopping=True,
                                         no_repeat_ngram_size=2,
+                                        top_p=0.95,
                                         top_k=50,
-
                                         eos_token_id=tokenizer.eos_token_id,
                                         pad_token_id=tokenizer.pad_token_id)
                                     #   attention_mask=input_ids['attention_mask'],
-                                    #   top_p=0.95,
-            output = tokenizer.decode(summary_ids[0][prompt_length:], skip_special_tokens=True) #str([tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids])
+            output = tokenizer.decode(summary_ids[0][prompt_length:], skip_special_tokens=True) #[ prompt_length:] to separate prompt from generation
+            #str([tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids])
             print(output)
+            assert (len(output)<len(prompt))
             chunksum += output
         summary = chunksum
         sumlen=len(tokenizer.tokenize(summary))
         # Decode and return the summaries
         print("GPT2 Summary: len", sumlen)
     return summary
-
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 import torch
 
@@ -753,8 +866,8 @@ def bart_summarize_text(input_text, summarization_ratio=.1):
         inputs = BART_tokenizer(chunk, return_tensors='pt', truncation=True, padding="max_length")
         summary_ids = BART_model.generate(inputs.input_ids, num_beams=4, max_new_tokens=max_length/2, min_length=5, early_stopping=True)
         summary = BART_tokenizer.decode(summary_ids[0], skip_special_tokens=True) 
+        print(summary)
         return summary
-
     current_text = input_text  # Initialize current_text to be the input_text
     max_tokens = tokens_per_chunk - 1 if tokens_per_chunk > max_summary_len else max_summary_len# make the loop condition smaller than attention window
     while num_output_summary_tokens > max_tokens:
@@ -766,6 +879,7 @@ def bart_summarize_text(input_text, summarization_ratio=.1):
 
         chunks = chunk_sents_from_text(current_text, tokens_per_chunk)
 
+        print(f"BART has {len(chunks)} chunks")
 
         # Summarize each chunk
         chunk_summaries = [bart(chunk) for chunk in chunks if len(chunk)>5]
@@ -890,7 +1004,6 @@ def kmeans_centroid_sampling(original_text, summarization_ratio=.10):
 
     return summary
 
-from textwrap import wrap
 import anthropic
 def claude_summarize_text(input_text, max_tokens=32000, ANTHROPIC_KEY=""):
     """
@@ -909,6 +1022,7 @@ def claude_summarize_text(input_text, max_tokens=32000, ANTHROPIC_KEY=""):
 
     # Split the input text into chunks
     chunks = chunk_sents_from_text(input_text, chunk_size)
+    print(f"Claude has {len(chunks)} chunks")
 
     # Initialize an empty string for the summary
     summary = ""
@@ -978,7 +1092,6 @@ def gpt4_summarize_text(input_text, max_tokens=32000, OPENAI_API_KEY="YOUR_OPENA
     # Return the final summary text, which is now guaranteed to be within the max_tokens limit
     return current_text
 
-
 def ground_to_knn_pairs(original, comparison, original_text_sentence_embeddings=None):
     """
     Ground each sentence of the summarized text to the closest original subtitle.
@@ -1001,14 +1114,14 @@ def ground_to_knn_pairs(original, comparison, original_text_sentence_embeddings=
     comparable_embeddings = [ get_embedding(sent) for sent in comparison]
 # Initialize NearestNeighbors with n_neighbors set to the length of the original list.
     # This ensures we have enough neighbors to find unique matches.
-    nbrs = NearestNeighbors(n_neighbors=len(original), metric='cosine').fit(original_embeddings)
-
+    num_neighbors = min(len(comparable_embeddings), len(original_embeddings) - 1)
+    nbrs = NearestNeighbors(n_neighbors=num_neighbors, metric='cosine').fit(original_embeddings)
     # Prepare the list to store the pairs and a set to track used original sentences.
     grounded_sentences = []
     available_indices = set(range(len(original)))  # All original indices are initially available.
-
     # Find nearest neighbors for each sentence in the comparison list.
     distances, indices = nbrs.kneighbors(comparable_embeddings)
+
     abstract_sentences=[]
     # Iterate through each set of neighbors found for each sentence in comparison.
     for comp_idx, neighbor_indices in enumerate(indices):
@@ -1028,41 +1141,37 @@ def ground_to_knn_pairs(original, comparison, original_text_sentence_embeddings=
 ## VISUALIZE THE DATA
 
 import matplotlib
-def generate_comparison_heatmap(full_codebook_scores, scoreboards, name=""):
+def generate_heatmap(scoreboards, name=""):
     """
-    Generate a heatmap showing the difference in theme representation between 
-    each model and the original scores, with models on the Y-axis and themes on the X-axis.
+    Generate a heatmap showing the theme scores for each model.
     
     Args:
-    full_codebook_scores (dict): Theme scores for the original text.
     scoreboards (dict of dict): Dictionary of dictionaries, each representing theme scores for a specific model.
     name (str): Name for the plot, typically the text or dataset being analyzed.
     
     Returns:
-    None
+    Tuple of file names for the heatmap image and the CSV file.
     """
-    # Normalize the original scores to ensure keys are consistent
-    original_scores = {key.split()[0]: count for key, count in full_codebook_scores.items()}
+    # Extract all models and themes from the scoreboards
+    all_models = list(scoreboards.keys())
+    # Assume all models have the same set of themes for simplicity
+    all_themes = list(next(iter(scoreboards.values())).keys())
 
-    # Initialize a matrix to hold the difference data for the heatmap
-    all_models = sorted(scoreboards.keys())
-    all_themes = sorted(original_scores.keys())
-    differences_matrix = np.zeros((len(all_models), len(all_themes)))
+    # Initialize a matrix to hold the score data for the heatmap
+    scores_matrix = np.zeros((len(all_models), len(all_themes)))
 
-    # Calculate the differences for each theme and model
+    # Fill in the scores matrix with values from the scoreboards
     for j, model in enumerate(all_models):
         for i, theme in enumerate(all_themes):
-            model_score = scoreboards[model].get(theme, 0)
-            original_score = original_scores.get(theme, 0)
-            # Calculate the difference and update the matrix
-            differences_matrix[j, i] = model_score - original_score
-
+            model_score = scoreboards[model].get(theme, 0)  # Default to 0 if theme not present
+            scores_matrix[j, i] = model_score
+    theme_titles = [theme.split(":")[0] for theme in all_themes]
     # Creating the heatmap
     sns.set(style="whitegrid")
-    plt.figure(figsize=(14, 10))  # Adjusted for potentially longer model names and theme names
-    sns.heatmap(differences_matrix, annot=True, fmt=".2f", cmap='coolwarm',
-                yticklabels=all_models, xticklabels=all_themes)
-    plt.title(f'Theme Representation Differences: {name}')
+    plt.figure(figsize=(14, 10))  # Adjust size as needed
+    sns.heatmap(scores_matrix, annot=True, fmt=".2f", cmap='coolwarm',
+                yticklabels=all_models, xticklabels=theme_titles)
+    plt.title(f"Theme Differences Across Models' Retellings of:\n{name}")
     plt.ylabel('Model')
     plt.xlabel('Theme')
     plt.xticks(rotation=45, ha='right')
@@ -1070,16 +1179,15 @@ def generate_comparison_heatmap(full_codebook_scores, scoreboards, name=""):
     plt.tight_layout()
     file_name = re.sub(r'[^\w\s]', '', name).replace(" ", "")
     # Save the heatmap
-    heatmap_file_name = f'{file_name}_theme_representation_heatmap.png'
+    heatmap_file_name = f'{file_name}_theme_scores_heatmap.png'
     plt.savefig(heatmap_file_name, dpi=300)
     plt.close()  # Close the plot to prevent it from displaying inline if undesired
-    # Convert the differences matrix to a DataFrame for saving as CSV
-    differences_df = pd.DataFrame(differences_matrix, index=all_models, columns=all_themes)
-    csv_file_name = f'{file_name}_theme_representation_differences.csv'
-    differences_df.to_csv(csv_file_name)
+    # Convert the scores matrix to a DataFrame for saving as CSV
+    scores_df = pd.DataFrame(scores_matrix, index=all_models, columns=theme_titles)
+    csv_file_name = f'{file_name}_theme_scores.csv'
+    scores_df.to_csv(csv_file_name)
+    
     return heatmap_file_name, csv_file_name
-
-
 
 def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_graph.png", title=""):
     """
@@ -1096,7 +1204,7 @@ def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_grap
         return pos - orig_pos, neg - orig_neg
 
     # Setup figure and axes
-    fig, ax = plt.subplots(figsize=(14, 12))
+    fig, ax = plt.subplots(figsize=(18, 12))
 
     # Determine the number of models and categories for plotting
     n_categories = len(categories)
@@ -1124,15 +1232,15 @@ def bar_graph(full_codebook_scores, scoreboards, categories, file_name="bar_grap
 
         # Plot bars for this category
         ax.bar(indices + i * bar_width, heights, bar_width, bottom=bottoms, label=category)#.split()[0])
-
+    title = f"Amplitude of Net Moral Value Bias in LLM Distillation of {title} \n"
     # Customize the plot
     ax.set_xlabel('Model')
     ax.set_ylabel('∆(pos - neg) Story Moral Representation  \n  Change in modeled occurrences of positive theme minus negative theme')
-    # ax.set_title(title)
+    ax.set_title(title)
     ax.set_xticks(indices + bar_width * (n_categories / 2))
     ax.set_xticklabels(model_names)
    # ax.legend(title="Category", loc='upper left', bbox_to_anchor=(1, 1))
-    ax.legend(title=f"Amplitude of Net Moral Value Bias in LLM Distillation of {title} \n", loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=1)
+    ax.legend(title=f"", loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=1)
     ax.grid(True, which='major', axis='y', linestyle='--')
     plt.xticks(rotation=45, ha='right')  # Rotate text type names for better visibility
 
@@ -1184,7 +1292,7 @@ def theme_span_linegraph(full_codebook_scores, scoreboards, file_name="line_grap
     for text_type in text_types:
         # Extract data for the current text type across all categories
         text_type_data = [percentage_diffs[category][text_type] for category in categories]
-        plt.plot([category.split()[0] for category in categories], text_type_data, label=text_type, marker='o')
+        plt.plot([category.split(":")[0] for category in categories], text_type_data, label=text_type, marker='o')
     
     # Customize the graph
     plt.title(f'Comparison of Models\' Summary of: \n{title}')
@@ -1349,7 +1457,7 @@ def generate_chi_square_heatmap(original_counts, summarized_counts, name="", sum
     sns.set(style="white")
     plt.figure(figsize=(10, 6))
     sns.heatmap(matrix, annot=True, fmt=".2f", cmap='YlGnBu', xticklabels=list(all_categories), yticklabels=["Original", "Summarized", "Expected Original", "Expected Summarized", "Chi-Square", "P-Value"])
-    plt.title(f'{summary_type} Chi-Square Test Heatmap\n summarization of {name}')
+    plt.title(f'Thematic Preferences in {summary_type} model retellings of {name}\n Chi-Square Heatmap')
     plt.yticks(rotation=0)  # Rotate labels
     plt.xticks(rotation=45, ha='right')  # Rotate labels
     plt.tight_layout()
@@ -1379,7 +1487,7 @@ def chunk_sents_from_text(text: str, max_chunk_len: int) -> list[str]:
     curr_chunk_tokens = 0
     curr_chunk_sents = []
     chunks = []
-    print("target num chunks", target_num_chunks)
+
     print("target chunk len", target_chunk_len)
     for i, sent in enumerate(sents):
         
@@ -1446,21 +1554,33 @@ def load_and_preprocess_srt(file_path):
 
 if __name__ == '__main__':
 
-    research_question = "The Moral of the Story is"
-    videos=[]
-    codebooks = []
+    research_question = "The Moral of the Story deals with"
+
     gospels_codebook = [
-    ("Compassion: Demonstrating care and understanding towards others, acting on the principle of empathy.",
-     "Apathy: Showing a lack of interest or concern for the hardships or suffering of others."),
-    ("Mercy: Exercising forgiveness and leniency towards those who have erred or caused harm.",
-     "Retribution: Advocating for punitive measures as a response to wrongdoing, justice."),
-    ("Modesty: Exhibiting humility and a lack of arrogance in one's achievements and interactions with others.",
-     "Arrogance: Displaying an exaggerated sense of one's own importance or abilities, often at the expense of others."),
-    ("Trustworthiness: Being reliable and faithful in one's commitments and responsibilities.",
-     "Skepticism: Exhibiting doubt and a critical questioning of motives, possibly leading to mistrust."),
-    ("Altruism: Prioritizing the welfare of others and engaging in selfless acts of kindness.",
-     "Egoism: Focusing on one's own interests and well-being without regard for the needs of others.")
-]
+        # Theme: Compassion vs. Apathy
+        ("Compassion: Acts of kindness, teachings on loving one’s neighbor", "Apathy: Indifference or lack of concern towards others' suffering"),
+        # Theme: Forgiveness vs. Resentment
+        ("Forgiveness: Narratives or teachings specifically mentioning forgiveness, stories of reconciliation", "Resentment: Holding grudges or refusing to forgive"),
+        # Theme: Justice vs. Injustice
+        ("Justice: Teachings on fairness, parables involving justice, critiques of hypocrisy", "Injustice: Actions or policies that perpetuate inequality or unfair treatment"),
+        # Theme: Humility vs. Pride
+        ("Humility: Teachings that promote modesty, narratives showcasing lowering of oneself", "Pride: Arrogant behavior, refusal to acknowledge one’s flaws"),
+        # Theme: Faith vs. Doubt
+        ("Faith: Passages encouraging trust in God, examples of individuals displaying strong faith", "Doubt: Lack of faith or trust, skepticism without seeking truth"),
+        # Theme: Repentance vs. Stubbornness
+        ("Repentance: Stories or teachings highlighting change of heart or turning away from sin", "Stubbornness: Refusal to change one’s ways or acknowledge wrongdoing"),
+        # Theme: Sacrifice vs. Selfishness
+        ("Sacrifice: Examples of self-giving love, teachings on serving others", "Selfishness: Focusing solely on one’s own interests without regard for others"),
+        # Theme: Truth vs. Deception
+        ("Truth: Teachings against lying or deceit, parables valuing truthfulness", "Deception: Engaging in lies, misleading others for personal gain"),
+        # Theme: Peace vs. Conflict
+        ("Peace: Teachings promoting peace, narratives resolving conflicts without violence", "Conflict: Inciting or engaging in violence, exacerbating disagreements"),
+        # Theme: Stewardship vs. Exploitation
+        ("Stewardship: Passages discussing care for the Earth, responsible management of resources", "Exploitation: Misusing resources or harming the environment for selfish ends")
+    ]
+
+
+
     zen_koans_codebook = [
         ("Insight: Achieving a deep understanding or realization that transcends conventional thought and logic.",
         "Confusion: Remaining entangled in intellectual or logical reasoning, missing the essence of Zen."),
@@ -1518,91 +1638,75 @@ if __name__ == '__main__':
         "Excess: Overindulgence that leads to moral lapse or harm to oneself and others."),
         ("Harmony: Working together for common goals, promoting peace and cooperative strength.",
         "Conflict: Disagreements or discord that fracture community unity and hinder collective progress.")
-    ]    
-
-    #name = "Short " #TEST 14 minute Stoicism, might be too short for any reasonable results
-    name = "Marcus Aurelius: The Man Who Solved The Universe" #TEST 14 minute video
-    video_id = "tv6W0Nv5ev0" #  "https://www.youtube.com/watch?v=tv6W0Nv5ev0 \n"
-    #out = evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2)
-    
-    #NOTE: Marcus Aurelius is associated with Ego when mentioned in quotes which represent patience.
-    
-    name = "The Allegory of the Cave" #TEST 6 minute video
-    video_id = "OFylXQRbolM" #  "https://www.youtube.com/watch?v=OFylXQRbolM \n"
-    out = name + "\n"
-    videos.append(video_id)
-    #out = evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2, use_ensemble_summary=False) # Don't use the ensemble model when testing the graphing functions!
-    name = name.replace(" ", "").replace(":","").strip() + "_model_moralsum_results.txt" 
-    with open(name, 'w') as f:
-        f.write(out)
-    print("name of file output:", name)
-
-    gc.collect()
-    torch.cuda.empty_cache()
+    ]
 
     name = "The Parables of Jesus Christ"
     video_id = "Ed41paFWSKM" # 60min Parables "https://www.youtube.com/watch?v=Ed41paFWSKM \n"
     out = name + "\n"
-    videos.append(video_id)
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook)
-    with open(name.replace(" ", "").strip() + "_model_moralsum_results.txt", 'w') as f:
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question, codebook=gospels_codebook)
+    name = name.replace(" ", "").strip() + "_model_moralsum_results.txt"
+    with open(name, 'w') as f:
         f.write(out)
-    print(video_id + "model_moralsum_results.txt")
+    print(name)
 
     gc.collect()
     torch.cuda.empty_cache()
-
-    name = "The Gospels of Matthew, Mark, Luke, & John"
+    name = "The Gospels of Matthew, Mark, Luke, and John"
     out = name + "\n"
-    video_id = "3UxowslJeTI" # 8 hours of the gospels  "https://youtu.be/3UxowslJeTI \n"
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=1/50)
-    videos.append(video_id)    
-    with open(name.replace(" ", "").replace(",","").replace("&","") + "_model_moralsum_results.txt", 'w') as f:
-        f.write(out)
-    print(video_id + "_model_moralsum_results.txt")
+    video_id = "gospels.txt"#"https://openbible.com/textfiles/akjv.txt" 
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=1/20) 
 
+    name=name.replace(" ", "").replace(",","").replace("&","")+ "_model_moralsum_results.txt"
+    with open(name , 'w') as f:
+        f.write(out)
+    print(name)
     gc.collect()
     torch.cuda.empty_cache()
 
     name = "Plato's Republic \n"
     out = name + "\n"
     video_id = "CqGsg01ycpk" #4hr audiobook of the Republic #"https://youtu.be/CqGsg01ycpk \n"
-    videos.append(video_id)
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=platos_republic_codebook, summarization_ratio=1/20)
-    with open(video_id + "model_bias_results.txt", 'w') as f:
+
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=platos_republic_codebook, summarization_ratio=1/20)
+    name=name.replace(" ", "").replace(",","").replace("'","")+ "_model_moralsum_results.txt"
+    with open(name, 'w') as f:
         f.write(out)
-    print(video_id + "_model_moralsum_results.txt")
+    print(name)
 
     gc.collect()
 
     name = "Aesop's Fables"
     out = name+"\n"
-    video_id = "aaMLVsH6ikE" #aesops fables 3hr   "https://youtu.be/aaMLVsH6ikE \n"
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=aesops_fables_codebook, summarization_ratio=1/15)
-    videos.append(video_id)
-    with open(name.replace(" ", "").replace(",","") + "_model_moralsum_results.txt", 'w') as f:
+    video_id =  "https://ia801403.us.archive.org/26/items/aesopsfables00028gut/aesopa10.txt" #"aaMLVsH6ikE" #aesops fables 3hr   "https://youtu.be/aaMLVsH6ikE \n"
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=aesops_fables_codebook, summarization_ratio=1/15)
+
+    name =name.replace(" ", "").replace(",","").replace("'","")+ "_model_moralsum_results.txt"
+
+    with open(name, 'w') as f:
         f.write(out)
-    print(video_id + "_model_moralsum_results.txt")
+    print(name)
 
     gc.collect()
 
     name = "101 Zen Stories and Koans"
     out = name + "\n"
     video_id= "Y0p663Ot8mo" # zen koans 1hr  "https://youtu.be/Y0p663Ot8mo \n"
-    videos.append(video_id)
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=zen_koans_codebook)
-    with open(video_id + "_model_moralsum_results.txt", 'w') as f:
+
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=zen_koans_codebook)
+    name=name.replace(" ", "") + "_model_moralsum_results.txt"
+    with open(name, 'w') as f:
         f.write(out)
-    print(video_id + "_model_moralsum_results.txt")
+    print(name)
 
     gc.collect()
 
     name = "The Fables of the Panchatantra"
     out = name + "\n"
-    video_id = "lWnJem4hKxY" # 8 hours of the Panchatantra  "https://youtu.be/lWnJem4hKxY \n"
-    out += evaluate_summarization_bias(name=name, content_id=video_id, research_question=research_question,codebook=panchatantra_codebook, summarization_ratio=1/50)
-    videos.append(video_id)    
-    with open(name.replace(" ", "").strip() + "_model_moralsum_results.txt", 'w') as f:
+    video_id = "https://archive.org/stream/ryder-1925-panchatantra-english/Ryder_1925_Panchatantra_English_djvu.txt" #"lWnJem4hKxY" # 8 hours of the Panchatantra  "https://youtu.be/lWnJem4hKxY \n"
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=panchatantra_codebook, summarization_ratio=1/50)
+
+    name=name.replace(" ", "") + "_model_moralsum_results.txt"
+    with open(name, 'w') as f:
         f.write(out)
-    print(video_id + "_model_moralsum_results.txt")
+    print(name)
     print("SUCCESS! ALL CONTENT HAS BEEN ANALYZED")

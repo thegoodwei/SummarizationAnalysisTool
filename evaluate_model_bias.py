@@ -85,15 +85,14 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
 
     results += f"\nTokenln Primary Source: {total_tokens} * Summarization Ratio: {summarization_ratio} = \n Tokenln Per Summary: <{max_tokens}\n\n"
     results += f"Themes for Classification: \n {str(codebook)}\n\n"
-    results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7B-Instruct-v0.2, phi-2, T5-base, bart-large-cnn, gpt2, roberta, and all-MiniLM-L6-v2 for Agglomerative_Clustering and for k-Means_Clustering \n"
-    results += "Post-summary grounding with K-Means Nearest-Neighbor (KNN) applied to each Abstract Summary Sentence for the nearest unique Primary Source Quote sentence"
+    results += "Models Evaluated: LLAMA-7b-chat-hf, Mistral-7B-Instruct-v0.2, Gemma-2b-it, Phi-2, T5-base, Bart-large-cnn, gpt2, Roberta \-base_NLL, BERT-large_K-Means_Clustering, and all-MiniLM-L6-v2_Agglomerative_Clustering \n"
+    results += "Post-summary grounding of ensemble with K-Means Nearest-Neighbor (KNN) applied to each Abstract Summary Sentence for the nearest unique Primary Source Quote sentence"
 
     print(results)
     summaries = {}
     sentences =  [sent.text for sent in nlp(transcript).sents if sent.text != " "]
     transcript = ". ".join(sentences).strip().replace(". .",". ").replace("..",". ").strip()
     print("\n\n\nTranscript:\n"+transcript)
-
 
     # TO EVALUATE MORE MODELS: ADD THE MODEL SUMMARIES TO THE DICT LIKE THIS:
 
@@ -103,37 +102,66 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
     # OPENAI_APIKEY = "YOUR_OPENAI_KEY"
     # summaries['gpt4'] = gpt4_summarize_text(transcript, max_tokens=max_tokens, OPENAI_API_KEY=OPENAI_APIKEY)
 
-    # Requires more space than currently available
-
-    summaries["Gemma-2b-it"] = gemma_summarize(transcript, summarization_ratio=summarization_ratio)
-
-    summaries["Llama-2-7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
 
     summaries["Mistral-7B-Instruct-v0.2_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+    assert(len(BERT_tokenizer.tokenize(summaries["Mistral-7B-Instruct-v0.2_summary"]))<max_tokens+10)
+
+    summaries["Llama-2-7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+    # Gemma 7b gets killed on gtx3060 
+    summaries["Gemma-2b-it_summary"] = gemma_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
 
     summaries["Phi-2_summary"] = phi2_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+
 
     summaries['bart-large-cnn_summary'] = bart_summarize_text(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+
 
     summaries["t5-base_summary"] = t5_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+
 
     summaries["GPT2_summary"] = gpt2_summarize(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
-    summaries["Roberta-large_nll"] = extractive_summary_nll(transcript, summarization_ratio=summarization_ratio)
+    summaries["Roberta-base_nll"] = extractive_summary_nll(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
-    summaries["bert-base_Kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(min(1,summarization_ratio*len(sentences))))).replace(". .",". ").replace("..",".")
-
-
-    summaries['all-MiniLM-L6-v2_Kmeans'] = kmeans_centroid_sampling(transcript, summarization_ratio=summarization_ratio)
-
+    #summaries["bert-base_Kmeans"] = ". ".join(bert_kcentroid_quotes(transcript.split(), num_quotes=int(min(1,summarization_ratio*len(sentences))))).replace(". .",". ").replace("..",".")
+    summaries['Bert-base_Kmeans'] = kmeans_centroid_sampling(transcript, summarization_ratio=summarization_ratio)
+    print(summaries['Bert-base_Kmeans'])
+    print(len(BERT_tokenizer.tokenize(summaries['Bert-base_Kmeans'])))
+    gc.collect()
+    torch.cuda.empty_cache()
 
     summaries["all-MiniLM-L6-v2_Agglomerative"] = agglomerative_sampling(transcript, summarization_ratio=summarization_ratio)
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # not enough space to display two kmeans and two all-MiniLM sentence transformers, skip this function
+
 
     
     sentence_embeddings = [get_embedding(sentence) for sentence in sentences]
-    
+    gc.collect()
+    torch.cuda.empty_cache()
+
     primary_text_themes, average_mean_difference = classify_sentences(transcript, codebook, research_question)
     primary_theme_scores = get_category_distribution(primary_text_themes, codebook)
 
@@ -164,7 +192,7 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
             # This works to generate sample quotes from each model, slightly redundant calculations if classification was first priority over model bias.
             # when dealing with classification for the study data we can store the scoreboard dicts in a database with mean-diff on ensemble codebook classifications, enabling you to remove this logic and pull the sentences from vector db relating to each theme.
             print("Top Coded Sentences from", summary_key)
-            representative_sentences = bert_kcentroid_quotes(". ".join([summaries[summary_key], ". ".join(knn_extracted_sents)]).replace(". .",". "), num_quotes=(len(codebook)))
+            representative_sentences = bert_kcentroid_quotes(". ".join([summaries[summary_key], ". ".join(knn_extracted_sents)]).replace(". .",". "), num_quotes=(2*len(codebook))) #half will be filtered out by classification reranking
             categories, quotes = ground_to_knn_pairs(codebook, representative_sentences)
             categorized_quotes,mean_diff = classify_sentences(quotes,categories, research_question) # second value returned is the codebook:quote dict
 
@@ -173,28 +201,34 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
                 result = f"    {i+1} | {category.split(':')[0]} \n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
                 results += result
                 print(result) # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
+            gc.collect()
+            torch.cuda.empty_cache()
 
         results += f"\n\n Best Theme Classifications for the Ensemble (all models):\n"
-        abstractive_ensemblesum_summary = bert_kcentroid_quotes(summaries['Ensemble (abstract_summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
+        abstractive_ensemblesum_summary = bert_kcentroid_quotes(summaries['Ensemble (abstract summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
         
         categories, summary = ground_to_knn_pairs(codebook, abstractive_ensemblesum_summary)
         abstract_ensemble_themes_quotes,_ = classify_sentences(summary,categories, research_question) 
-        
-        extractive_ensemblesum_quotes = bert_kcentroid_quotes(summaries['Ensemble (extract_summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
-        
-        categories, quotes = ground_to_knn_pairs(codebook, extractive_ensemblesum_quotes)
-        extract_ensemble_theme_quotes,_ = classify_sentences(quotes,categories, research_question) 
-
         for i,(quote,category) in enumerate(abstract_ensemble_themes_quotes.items()):
             category_result = f"    Abstractive Ensemble Summary Themes: {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
             print(category_result)
             results += category_result
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        extractive_ensemblesum_quotes = bert_kcentroid_quotes(summaries['Ensemble (extract summaries)'].replace(". .",". "), num_quotes=(len(codebook)))
+        
+        categories, quotes = ground_to_knn_pairs(codebook, extractive_ensemblesum_quotes)
+        extract_ensemble_theme_quotes,_ = classify_sentences(quotes,categories, research_question) 
+
 
         for i,(quote) in enumerate(extract_ensemble_theme_quotes):
             category_result = f"    Extract Ensemble Quote Themes: {i} | {category.split(':')[0]}\n{quote}\n" # These groups could each be added to the nearest neighbor category to better classify, at cost of context window. ##TODO future research
             print(category_result)
             results += category_result
 
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
     summary_scores = {}
@@ -205,18 +239,21 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
             summary_scores[summary_key] = get_category_distribution(categorized_sentences, codebook)
             results += f"\n\nMeasured confidence for BERT NSP and GPT2 nll classification:\n{summary_key} Average Mean Difference = {average_mean_difference} (lower is better)\nTheme Scores:"
             results += str(summary_scores[summary_key])
+    gc.collect()
+    torch.cuda.empty_cache()
 
     scored_differences={}
 #   Compare the distribution of sentence categories applied in the summary to the original source distribution
     for summary_key, summary_scoreboard in summary_scores.items():
         results += compare_distributions(primary_theme_scores, summary_scoreboard, summary_type = summary_key, name=name)
         scored_differences[summary_key] = {category:sumscore-origscore for category,sumscore in summary_scoreboard.items() for theme,origscore in primary_theme_scores.items()}
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # Print summaries onto results txt after we have already found the best representative sentences for the codebook and outlined the data
     results += "\n\n\n\n\nMODEL SUMMARIES TO AUDIT:"
     for model,summary in summaries.items():
-        results += f"\n\nSummary of {name} from {model}\n{summary}" #if model != "Ensemble" else ""
-        
+        results += f"\n\nSummary of {name} from {model}\n{summary}" if "abstract" not in model else "" 
     results += f'\n\n\n\n\nGraphing the change in theme distributions across models:\n\n'
 
     heatmapfile,csvfile = generate_heatmap(scored_differences,name=name)
@@ -257,7 +294,7 @@ def bert_kcentroid_quotes(text, num_quotes=5):
         sentences = chunk_sents_from_text(text, 100)#[sent.text for sent in nlp(transcript).sents]
     else:
         sentences = text
-    num_quotes = min(num_quotes,len(sentences))
+    num_quotes = max(1,min(num_quotes,len(sentences)))
     # Tokenize and encode the sentences using BERT.
     inputs = tokenizer(sentences, padding=True, truncation=True, max_length=512, return_tensors="pt")
     
@@ -267,7 +304,7 @@ def bert_kcentroid_quotes(text, num_quotes=5):
         embeddings = outputs.last_hidden_state[:, 0, :].numpy()
 
     # Apply K-means clustering on the embeddings.
-    kmeans = KMeans(n_clusters = min(len(sentences), num_quotes), random_state=0).fit(embeddings)
+    kmeans = KMeans(n_clusters = max(min(len(sentences), num_quotes), 1), random_state=0).fit(embeddings)
 
     # Initialize a list to hold the key sentences for each cluster.
     key_sentences = [None] * num_quotes
@@ -318,6 +355,9 @@ def classify_sentences(text, codebook=["categories","themes","values"], research
     for sentence in sentences:
         sentence_nsp_scores = {}
         sentence_nll_scores = {}
+        
+        gc.collect()
+        torch.cuda.empty_cache()
 
         for category in codebook:
             # Concatenate sentence and hypothesis
@@ -461,15 +501,19 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2600, comma
  
     max_summary_len = max((len(tokenizer.tokenize(input_text)) * summarization_ratio), 50)
     summary = input_text
-
+    sumlen = len(tokenizer.tokenize(summary))
     print(f"INPUT TO LLAMA: len{len(tokenizer.tokenize(input_text))}")
-    while max_summary_len < len(tokenizer.tokenize(summary)):
+    while max_summary_len < sumlen:
         chunks = chunk_sents_from_text(summary, max_chunk_len)
         print(f"Llama has {len(chunks)} chunks")
         chunksum=""
+        
+        gc.collect()
+        torch.cuda.empty_cache()
+
         for chunk in chunks:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
-            prompt = f"{chunk} ```{command}```:"
+            prompt = f"{chunk} | {command}:"
             prompt_length = len(tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
@@ -480,15 +524,15 @@ def llama_summarize(input_text, summarization_ratio=.1,max_chunk_len=2600, comma
             result = result.split(prompt)[1] if prompt in result else result
             chunksum += result.strip() + ". "
             print(result)
-        summary = chunksum.strip()
-
+        summary = chunksum.strip().replace(". .",". ").replace("..",". ")
+        sumlen = len(tokenizer.tokenize(summary))
 
     print(f"OUTPUT OF LLAMA: len{len(tokenizer.tokenize(summary))}")
 
     return summary.strip().replace("..",". ").replace(". .",". ").strip()
 # !pip install autoawq
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="Task: Summarize the lessons of the story as a concise tl;dr summary paragraph"):
+def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="Task: Summarize the lesson from the text into a concise tl;dr summary paragraph"):
 #    model_name = "mistralai/Mistral-7B-Instruct-v0.1"
     #tokenizer = AutoTokenizer.from_pretrained(modelname)
     #model = AutoModelForCausalLM.from_pretrained(modelname).to(device)
@@ -535,27 +579,30 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
         #early_stopping=True, num_beams=2
     )
     # pipe.tokenizer.to(device)
-    max_summary_len = min((len(BERT_tokenizer.tokenize(text)) * summarization_ratio), 100)
+    max_summary_len = (len(BERT_tokenizer.tokenize(text)) * summarization_ratio) 
    # tokenizer.pad_token_id = tokenizer.eos_token_id
-    sumlen=len(BERT_tokenizer.tokenize(text))
     summary=text
-    print("Mixtral to summarize: len",sumlen, " tokens" )
+    sumlen=len(BERT_tokenizer.tokenize(summary))
+    print("Mistral to summarize: len",sumlen, " tokens" )
     while max_summary_len < sumlen :
         chunks = chunk_sents_from_text(summary, max_chunk_len)
         print(f"Mistral has {len(chunks)} chunks of apx{max_chunk_len} tokens to summarize")
-
         chunksum = ""
+        gc.collect()
+        torch.cuda.empty_cache()
+
         for chunk in chunks:
-            prompt = f"Text: {chunk} ```{command}```: "
+            prompt = f"Text: {chunk} | {command}: "
 
             prompt_length=len(BERT_tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
                 max_new_tokens = min(max_summary_len,int(prompt_length/2)),
-            #   num_beams=4,
+            #   num_beams=4, # length_penalty = 5.0, early_stopping=True
                 top_k=50,
             #   min_length=10
             #   top_p=0.95,
+                
 
             )
             result = str((outputs[0]["generated_text"]) )
@@ -564,14 +611,14 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
 
             chunksum += result + ". "
 
-        summary = chunksum
+        summary = chunksum.replace("..",".").replace(". .",". ")
         sumlen = len(BERT_tokenizer.tokenize(summary))
         print("Mixtral Summary: len", sumlen)
 
     return text.strip().replace("..",". ").replace(". .",". ")
 
 from transformers import pipeline
-def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, command="task: **Summarize** the key lesssons of the story above in the format of a conclusion paragraph for an elementary school textbook"):
+def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, command="Task: Briefly **summarize** the key lessson of the text into a concise one-paragraph conclusion for an elementary school textbook."):
     model_name = "microsoft/phi-2"
     pipe = pipeline(
         "text-generation",  
@@ -583,7 +630,7 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, comma
     )
     pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
     pipe.model.config.pad_token_id = pipe.tokenizer.pad_token_id
-    max_summary_len = max((len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio),max_chunk_len/2)
+    max_summary_len = (len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio)
     summary = input_text
     sumlen = len(BERT_tokenizer.tokenize(summary))
     print("Phi-2 to summarize: len", sumlen)
@@ -592,6 +639,9 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, comma
         chunks = chunk_sents_from_text(summary, max_chunk_len)
         chunksum = ""
         print(f"Phi2 has {len(chunks)} chunks")
+        gc.collect()
+        torch.cuda.empty_cache()
+
         for chunk in chunks:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
             prompt = f"{chunk} | {command}: "
@@ -602,65 +652,64 @@ def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, comma
                 #max_length = int(prompt_length/2),
                 top_k=50, # Lower value filters a focused interpretation of the text
                 top_p=0.8, # lower values provide more focused and determistic generation, too low becomes a parrot, higher values are more diverse
-                #num_beams = 4, 
-                #early_stopping=True
+                #num_beams = 4,  #early_stopping=True, # length_penalty = 8.0
                 no_repeat_ngram_size=6,
                 do_sample=True,
                 temperature=0.2, # Prevent parroting loops, still somewhat deterministic
+
             )
             outputs = outputs[0]["generated_text"]
             result = outputs.split(prompt)[1] if prompt in outputs else outputs
+
+            result = result.replace("Task: Briefly **summerize** the key lesson of the text into a one-paragraph conclusion for a textbook.","").replace("Task:","").replace("task:","").replace("**Rewrite**","").replace("into a elementary school level textbook","").replace("the above paragraph","").replace("Answer:","").replace("Question:","").replace("Exercise:","").replace("Exercises:","")
+            pattern = r"(Answer|Answers|Question|Questions|Exercise|Exercises) \d+:"
+            result = re.sub(pattern, "", result)
             print(result)
-            chunksum +=  result + ". "
-            #print(f"chunksumlen: {len(pipe.tokenizer.tokenize(chunksum))}")
-            result_length = len(BERT_tokenizer.tokenize(chunksum)) 
-            #print(f"phi2 prompt len {prompt_length} \n phi2 result len {result_length}")
-        summary = result
+            chunksum +=  result.replace("\n",". ") 
+        summary = chunksum.replace("..",".").replace(". .",". ")
         sumlen = len(BERT_tokenizer.tokenize(summary))
         print("\n Phi-2 Summary: len", sumlen)
+    return summary.strip().replace(". .",". ").replace("..",". ")
         #print("\n Starting Length:", starting_len)
         #print("\n Chunked Length:", len(BERT_tokenizer.tokenize("".join(chunks))))
-
-    return summary.strip().replace(". .",". ").replace("..",". ")
-
-
 
 
 
 #from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from transformers import AutoTokenizer, GemmaForCausalLM
-def gemma_summarize(input_text, summarization_ratio=.1, max_chunk_len=5400, command="Summarize"):
+def gemma_summarize(input_text, summarization_ratio=.1, max_chunk_len=1000, command="Summarize"):
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b-it")
     model = GemmaForCausalLM.from_pretrained("google/gemma-2b-it")
-    model_name = "google/gemma-7b-it"
+    model_name = "google/gemma-2b-it"
 
     pipe = pipeline(
         "text-generation",  
-        model=model_name,
+        model=model,tokenizer=tokenizer,
         device_map="cuda",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,  
-       # early_stopping=True, num_beams=4,
     )
     pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
     pipe.model.config.pad_token_id = pipe.tokenizer.pad_token_id
     max_summary_len = max((len(BERT_tokenizer.tokenize(input_text)) * summarization_ratio),max_chunk_len/2)
     summary = input_text
     sumlen = len(BERT_tokenizer.tokenize(summary))
-    print("Phi-2 to summarize: len", sumlen)
+    print("gemma-2 to summarize: len", sumlen)
     while max_summary_len < sumlen:
-        starting_len = len(BERT_tokenizer.tokenize(summary))
         chunks = chunk_sents_from_text(summary, max_chunk_len)
         chunksum = ""
-        print(f"Phi2 has {len(chunks)} chunks")
+        print(f"gemma has {len(chunks)} chunks")
+        gc.collect()
+        torch.cuda.empty_cache()
+
         for chunk in chunks:
             # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
             prompt = f"{chunk} | {command}: "
             prompt_length = len(pipe.tokenizer.tokenize(prompt))
             outputs = pipe(
                 prompt,
-                max_new_tokens = min(8192 - (prompt_length), 4000),
+                max_new_tokens = min(8192 - (prompt_length), 500, prompt_length/2),
                 #max_length = int(prompt_length/2),
                 top_k=50, # Lower value filters a focused interpretation of the text
                 top_p=0.8, # lower values provide more focused and determistic generation, too low becomes a parrot, higher values are more diverse
@@ -668,22 +717,80 @@ def gemma_summarize(input_text, summarization_ratio=.1, max_chunk_len=5400, comm
                 do_sample=True,
                 temperature=0.2,
             )
+
             outputs = outputs[0]["generated_text"]
+            print("GEN")
             result = outputs.split(prompt)[1] if prompt in outputs else outputs
             print(result)
             chunksum +=  result + ". "
-            #print(f"chunksumlen: {len(pipe.tokenizer.tokenize(chunksum))}")
-            result_length = len(BERT_tokenizer.tokenize(chunksum)) 
-            #print(f"phi2 prompt len {prompt_length} \n phi2 result len {result_length}")
-        summary = result
+        summary = chunksum
         sumlen = len(BERT_tokenizer.tokenize(summary))
-        print("\n Phi-2 Summary: len", sumlen)
+        print("\n gemma-2 Summary: len", sumlen)
         #print("\n Starting Length:", starting_len)
         #print("\n Chunked Length:", len(BERT_tokenizer.tokenize("".join(chunks))))
 
     return summary.strip().replace(". .",". ").replace("..",". ")
 
+def bart_summarize_text(input_text, summarization_ratio=.1):
+    """
+    Summarize the input text using the BART model. Ensure that no content is truncated and 
+    the final summary does not exceed max tokens.
+
+    Args:
+    input_text (str): The input text to summarize.
+    max_tokens (int): The maximum length of the summary.
+
+    Returns:
+    str: The summarized text.
+    """
+    # Initialize conditions
+    tokens_per_chunk = 512# 345  # 512 Determine the initial optimal chunk size
+    BART_model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
+    BART_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
+    print("BART to Summarize")
+    def bart(chunk, max_length=500):
+        """
+        Summarize the input text using the BART model.
+
+        Args:
+        text (str): The input text to summarize.
+        model_name (str): The BART model name.
+        max_tokens (int): The maximum length of the summary.
+
+        Returns:
+        str: The summarized text.
+        """
+        inputs = BART_tokenizer(chunk, return_tensors='pt', truncation=True, padding="max_length")
+        summary_ids = BART_model.generate(inputs.input_ids, num_beams=4, max_new_tokens=max_length/2, min_length=5, early_stopping=True)
+        summary = BART_tokenizer.decode(summary_ids[0], skip_special_tokens=True) 
+        print(summary)
+        return summary
+    sumlen = len(BERT_tokenizer.tokenize(input_text)) + 1  # Initialize to enter the while loop
+    max_summary_len = int(sumlen * summarization_ratio)
+    current_text = input_text  # Initialize current_text to be the input_text
+    max_tokens = tokens_per_chunk - 1 if tokens_per_chunk > max_summary_len else max_summary_len# make the loop condition smaller than attention window
+    while max_tokens < sumlen:
+        print(sumlen)
+        # We chunk the current text (initially the input text, later could be the summary of the input text)
+        chunks = chunk_sents_from_text(current_text, tokens_per_chunk)
+        print(f"BART has {len(chunks)} chunks")
+        # Summarize each chunk
+        chunk_summaries = [bart(chunk) for chunk in chunks if len(chunk)>5]
+        gc.collect()
+        # Combine the chunk summaries
+        current_text = ' '.join(chunk_summaries).strip()
+        print(chunk_summaries)
+        # Update the number of tokens in the current text (which is the total summary at this point)
+        sumlen = len(BART_tokenizer.tokenize(current_text))
+        # If the total summary length is within the limit, we break the loop, else we continue
+        # The already summarized text (current_text) will be re-summarized in the next iteration if necessary
+        # This way, we are always summarizing symmetrically, maintaining the context as much as possible
+    gc.collect()
+    torch.cuda.empty_cache()
+    return current_text
+
 from transformers import T5Tokenizer, T5ForConditionalGeneration
+
 def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_len: int = 306,command="Summarize:") -> str:
         tokenizer=T5Tokenizer.from_pretrained('t5-base')
         model=T5ForConditionalGeneration.from_pretrained('t5-base')
@@ -694,14 +801,13 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
         # Initialize variables
         summary = input_text
         orig_length = len(tokenizer.tokenize(input_text))
-
+        sumlen = len(tokenizer.tokenize(summary))
         max_summary_len = summarization_ratio * orig_length
         print(f"T5 to summarize: len{orig_length}")
-        while max_summary_len < len(tokenizer.tokenize(summary)):
-            summary_text = ""
+        while max_summary_len < sumlen:
+            chunksum = ""
             chunks = chunk_sents_from_text(summary, max_chunk_len)
             print(f"T5 has {len(chunks)} chunks")
-
             for chunk in chunks:
                     # Tokenize the input chunk without padding and truncation to find the actual length of the chunk
                 input_text = f"{chunk}\n{command}:"
@@ -725,9 +831,14 @@ def t5_summarize(input_text: str, summarization_ratio: float = 0.2, max_chunk_le
                 # Decode the summary back to text
                 result = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
                 print(result)
-                summary_text += ". " + result
-            summary = summary_text
+                chunksum += ". " + result
+            summary = chunksum.replace(". .",". ").replace("..",".")
+            sumlen = len(tokenizer.tokenize(summary))
+
         print("T5 Summary: len", len(summary.split()))
+        gc.collect()
+        torch.cuda.empty_cache()
+
         return summary.strip().replace(". .",".").replace("..",". ")
 
 def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=900, command="In Summary:"):
@@ -749,14 +860,12 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=900, comman
     max_summary_len = max((len(tokenizer.tokenize(input_text)) * summarization_ratio), max_chunk_len)
     summary = input_text
     sumlen=len(tokenizer.tokenize(summary))
-    iterations=0
-    print("GPT2 to summarize: len", sumlen)
 
-    while max_summary_len < sumlen and iterations<5:
+    while max_summary_len < sumlen:
         chunks = chunk_sents_from_text(summary, max_chunk_len)
-        iterations +=1
         chunksum = ""
         print(f"GPT2 has {len(chunks)} chunks")
+
         for chunk in chunks:
           prompt = f"{chunk} | {command}:"
           if len(tokenizer.tokenize(chunk)) > 10:
@@ -783,123 +892,64 @@ def gpt2_summarize(input_text, summarization_ratio=.1, max_chunk_len=900, comman
             #str([tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids])
             print(output)
             assert (len(output)<len(prompt))
-            chunksum += output
-        summary = chunksum
+            chunksum += output +". "
+        summary = chunksum.replace("..",".").replace(". .",". ")
         sumlen=len(tokenizer.tokenize(summary))
         # Decode and return the summaries
         print("GPT2 Summary: len", sumlen)
+    gc.collect()
+    torch.cuda.empty_cache()
+
     return summary
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 import torch
 
-def extractive_summary_nll(text, summarization_ratio=0.1, model = None, tokenizer = None):
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-large') if tokenizer is None else tokenizer
-    model = RobertaForSequenceClassification.from_pretrained('roberta-large') if model is None else model
 
-#    tokenizer = RobertaTokenizer.from_pretrained('roberta-large') 
-#    model = RobertaForSequenceClassification.from_pretrained('roberta-large')
+def extractive_summary_nll(text, summarization_ratio=0.1):
+    # Initialize tokenizer and model
+    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+    model = RobertaForSequenceClassification.from_pretrained('roberta-base')
 
     # Split the text into sentences or coherent chunks
-    summary = ""
-    chunks = chunk_sents_from_text(text, 310)
+    chunks = chunk_sents_from_text(text, 200)  # This function needs to be defined or replaced with actual logic to split text
+    total_length = len(tokenizer.tokenize(text))
+    target_summary_length = int(total_length * summarization_ratio)  # Target length based on summarization ratio
+
+    # Process each chunk and compute importance scores
     importance_scores = []
-    print("Roberta to summarize: len", len(tokenizer.tokenize(text)))
-    for chunk in chunks if chunks else [text]:
+    for chunk in chunks:
         inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True)
         outputs = model(**inputs)
-        
-        # Assuming the second label corresponds to 'important'
         probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-        importance_score = probabilities[:, 1]  # Assuming index 1 corresponds to 'important'
-        importance_scores.append(importance_score.item())
+        importance_score = probabilities[:, 1].item()  # Assuming index 1 corresponds to 'important'
+        importance_scores.append((importance_score, chunk))
 
-    # Calculate dynamic threshold based on summarization ratio
-    sorted_scores = sorted(importance_scores, reverse=True)
-    num_top_chunks = int(len(chunks) * summarization_ratio)
-    adaptive_threshold = sorted_scores[num_top_chunks - 1] if num_top_chunks > 0 else min(importance_scores) 
+    # Sort chunks by importance score
+    importance_scores.sort(reverse=True, key=lambda x: x[0])
 
-    # Select chunks based on the dynamic threshold
-    selected_chunks = [(score, chunk) for score, chunk in zip(importance_scores, chunks) if score >= adaptive_threshold]
-    bagged_sample = " ".join([(chunk) for score, chunk in zip(importance_scores, chunks) if score >= adaptive_threshold])
-    summary = ""
-    for chunk in chunks: # Put it back in chronological order
-        if chunk in bagged_sample:
-            summary+="\n " + chunk
-    print(summary)
-    print("Roberta Summary: len", len(tokenizer.tokenize(summary)) )
+    # Select chunks until the target summary length is reached
+    summary_length = 0
+    selected_chunks = []
+    for score, chunk in importance_scores:
+        chunk_length = len(tokenizer.tokenize(chunk))
+        if summary_length + chunk_length <= target_summary_length or not selected_chunks:
+            selected_chunks.append(chunk)
+            summary_length += chunk_length
+        else:
+            break  # Stop adding chunks once we reach the target length
 
-    return summary
-  
+    # Compile the final summary
+    summary = ' '.join(selected_chunks)
+    print("Original Length:", total_length, "Target Summary Length:", target_summary_length, "Actual Summary Length:", len(tokenizer.tokenize(summary)))
 
-
-def bart_summarize_text(input_text, summarization_ratio=.1):
-    """
-    Summarize the input text using the BART model. Ensure that no content is truncated and 
-    the final summary does not exceed max tokens.
-
-    Args:
-    input_text (str): The input text to summarize.
-    max_tokens (int): The maximum length of the summary.
-
-    Returns:
-    str: The summarized text.
-    """
-    num_output_summary_tokens = len(BERT_tokenizer.tokenize(input_text)) + 1  # Initialize to enter the while loop
-    max_summary_len = int(num_output_summary_tokens * summarization_ratio)
-    # Initialize conditions
-    tokens_per_chunk = 512# 345  # 512 Determine the initial optimal chunk size
-    BART_model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
-    BART_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
-    print("BART to Summarize")
-    def bart(chunk, max_length=500):
-        """
-        Summarize the input text using the BART model.
-
-        Args:
-        text (str): The input text to summarize.
-        model_name (str): The BART model name.
-        max_tokens (int): The maximum length of the summary.
-
-        Returns:
-        str: The summarized text.
-        """
-        inputs = BART_tokenizer(chunk, return_tensors='pt', truncation=True, padding="max_length")
-        summary_ids = BART_model.generate(inputs.input_ids, num_beams=4, max_new_tokens=max_length/2, min_length=5, early_stopping=True)
-        summary = BART_tokenizer.decode(summary_ids[0], skip_special_tokens=True) 
-        print(summary)
-        return summary
-    current_text = input_text  # Initialize current_text to be the input_text
-    max_tokens = tokens_per_chunk - 1 if tokens_per_chunk > max_summary_len else max_summary_len# make the loop condition smaller than attention window
-    while num_output_summary_tokens > max_tokens:
-        print(num_output_summary_tokens)
-
-        # We chunk the current text (initially the input text, later could be the summary of the input text)
-
-
-
-        chunks = chunk_sents_from_text(current_text, tokens_per_chunk)
-
-        print(f"BART has {len(chunks)} chunks")
-
-        # Summarize each chunk
-        chunk_summaries = [bart(chunk) for chunk in chunks if len(chunk)>5]
-        gc.collect()
-        # Combine the chunk summaries
-        current_text = ' '.join(chunk_summaries).strip()
-
-        print(chunk_summaries)
-
-
-        # Update the number of tokens in the current text (which is the total summary at this point)
-        num_output_summary_tokens = len(BART_tokenizer.tokenize(current_text))
-        
-        # If the total summary length is within the limit, we break the loop, else we continue
-        # The already summarized text (current_text) will be re-summarized in the next iteration if necessary
-        # This way, we are always summarizing symmetrically, maintaining the context as much as possible
+    # Clean up resources
     gc.collect()
-    return current_text
+    torch.cuda.empty_cache()
 
-    # Return the final summary text, which is now guaranteed to be within the max_tokens limit
+    return summary  
+
+
+
 
 def agglomerative_sampling(original_text, summarization_ratio=0.2 ):
         sentences = chunk_sents_from_text(original_text, 100)
@@ -956,6 +1006,8 @@ def agglomerative_sampling(original_text, summarization_ratio=0.2 ):
         chronological_summary = [sentence for sentence in sentences if sentence in summary_sentences]
         # Combine the selected sentences into a summary
         summary = '. '.join(chronological_summary).strip().replace("..",". ").replace(". .",". ")
+        gc.collect()
+        torch.cuda.empty_cache()
 
         return summary
 
@@ -970,14 +1022,14 @@ def kmeans_centroid_sampling(original_text, summarization_ratio=.10):
 
     sentences = chunk_sents_from_text(original_text, 100)
     # Step 2: Generate Sentence Embeddings
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(sentences)
+    #model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = get_embedding(sentences)#model.encode(sentences)
 
     # Step 3: Apply K-Means Clustering
     n_clusters = max(1, int(len(sentences) * summarization_ratio))
-    print("kmeans")
+
     kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings)
-    print(".predict")
+
     # Step 4: Assign sentences to clusters
     sentence_clusters = kmeans.predict(embeddings)
     print("SUCCESSFUL KMEANS, clusters:", n_clusters)
@@ -1556,6 +1608,7 @@ if __name__ == '__main__':
 
     research_question = "The Moral of the Story deals with"
 
+
     gospels_codebook = [
         # Theme: Compassion vs. Apathy
         ("Compassion: Acts of kindness, teachings on loving one’s neighbor", "Apathy: Indifference or lack of concern towards others' suffering"),
@@ -1640,6 +1693,17 @@ if __name__ == '__main__':
         "Conflict: Disagreements or discord that fracture community unity and hinder collective progress.")
     ]
 
+
+    name = "The Allegory of the Cave" #TEST 6 minute video
+    video_id = "OFylXQRbolM" #  "https://www.youtube.com/watch?v=OFylXQRbolM \n"
+    #NOTE: Marcus Aurelius is associated with Ego when mentioned in quotes which represent patience.
+    name = "Marcus Aurelius: The Man Who Solved The Universe" #TEST 14 minute video
+    video_id = "tv6W0Nv5ev0" #  "https://www.youtube.com/watch?v=tv6W0Nv5ev0 \n"
+    out = analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2, use_ensemble_summary=False)
+    print(out)
+    gc.collect()
+    torch.cuda.empty_cache()
+
     name = "The Parables of Jesus Christ"
     video_id = "Ed41paFWSKM" # 60min Parables "https://www.youtube.com/watch?v=Ed41paFWSKM \n"
     out = name + "\n"
@@ -1651,15 +1715,17 @@ if __name__ == '__main__':
 
     gc.collect()
     torch.cuda.empty_cache()
+
     name = "The Gospels of Matthew, Mark, Luke, and John"
     out = name + "\n"
     video_id = "gospels.txt"#"https://openbible.com/textfiles/akjv.txt" 
-    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=1/20) 
+    out += analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.025) 
 
     name=name.replace(" ", "").replace(",","").replace("&","")+ "_model_moralsum_results.txt"
     with open(name , 'w') as f:
         f.write(out)
     print(name)
+ 
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -1699,7 +1765,6 @@ if __name__ == '__main__':
     print(name)
 
     gc.collect()
-
     name = "The Fables of the Panchatantra"
     out = name + "\n"
     video_id = "https://archive.org/stream/ryder-1925-panchatantra-english/Ryder_1925_Panchatantra_English_djvu.txt" #"lWnJem4hKxY" # 8 hours of the Panchatantra  "https://youtu.be/lWnJem4hKxY \n"
@@ -1709,4 +1774,6 @@ if __name__ == '__main__':
     with open(name, 'w') as f:
         f.write(out)
     print(name)
+
     print("SUCCESS! ALL CONTENT HAS BEEN ANALYZED")
+    

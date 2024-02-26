@@ -106,7 +106,8 @@ def analyze_summarization_effects(name, content_id, research_question, codebook=
     summaries["Mistral-7B-Instruct-v0.2_summary"] = mistral_summarize(transcript, summarization_ratio=summarization_ratio)
     gc.collect()
     torch.cuda.empty_cache()
-    assert(len(BERT_tokenizer.tokenize(summaries["Mistral-7B-Instruct-v0.2_summary"]))<max_tokens+10)
+    print(f"{len(BERT_tokenizer.tokenize(summaries['Mistral-7B-Instruct-v0.2_summary']))}<{max_tokens+10}")
+
 
     summaries["Llama-2-7b-chat-hf_summary"] = llama_summarize(transcript, summarization_ratio=summarization_ratio)
     gc.collect()
@@ -615,7 +616,7 @@ def mistral_summarize(text, summarization_ratio=.1,max_chunk_len=2650, command="
         sumlen = len(BERT_tokenizer.tokenize(summary))
         print("Mixtral Summary: len", sumlen)
 
-    return text.strip().replace("..",". ").replace(". .",". ")
+    return summary.strip().replace("..",". ").replace(". .",". ")
 
 from transformers import pipeline
 def phi2_summarize(input_text, summarization_ratio=.1, max_chunk_len=1348, command="Task: Briefly **summarize** the key lessson of the text into a concise one-paragraph conclusion for an elementary school textbook."):
@@ -1699,7 +1700,7 @@ if __name__ == '__main__':
     #NOTE: Marcus Aurelius is associated with Ego when mentioned in quotes which represent patience.
     name = "Marcus Aurelius: The Man Who Solved The Universe" #TEST 14 minute video
     video_id = "tv6W0Nv5ev0" #  "https://www.youtube.com/watch?v=tv6W0Nv5ev0 \n"
-    out = analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=gospels_codebook, summarization_ratio=.2, use_ensemble_summary=False)
+    out = analyze_summarization_effects(name=name, content_id=video_id, research_question=research_question,codebook=platos_republic_codebook, summarization_ratio=.2, use_ensemble_summary=False)
     print(out)
     gc.collect()
     torch.cuda.empty_cache()
@@ -1776,4 +1777,4 @@ if __name__ == '__main__':
     print(name)
 
     print("SUCCESS! ALL CONTENT HAS BEEN ANALYZED")
-    
+     

@@ -1,4 +1,4 @@
-# Model Summarization of Symbolic Stories for Evaluating Moral Comprehension
+# Model Summarization of Symbolic Stories for Evaluating Moral Comprehension of Language Models
 A Python script for benchmarking Language Models on their narrative comprehension of the moral of the story in culturally significant texts
 
 ## Overview

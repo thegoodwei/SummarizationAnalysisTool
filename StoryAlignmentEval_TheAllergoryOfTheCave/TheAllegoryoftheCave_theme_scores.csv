@@ -1,0 +1,13 @@
+,Malice,Virtue,Honor,Hate,Ego,Compassion
+Bert-base_Kmeans,100.0,0.0,0.0,0.0,0.0,0.0
+all-MiniLM-L6-v2_Agglomerative,100.0,0.0,0.0,0.0,0.0,0.0
+Roberta-base_nll,100.0,0.0,0.0,0.0,0.0,0.0
+GPT2_summary,100.0,0.0,0.0,0.0,0.0,0.0
+t5-base_summary,100.0,0.0,0.0,0.0,0.0,0.0
+bart-large-cnn_summary,100.0,0.0,0.0,0.0,0.0,0.0
+Phi-2_summary,0.0,0.0,0.0,100.0,0.0,0.0
+Gemma-2b-it_summary,0.0,0.0,0.0,100.0,0.0,0.0
+Llama-2-7b-chat-hf_summary,0.0,0.0,0.0,100.0,0.0,0.0
+Mistral-7B-Instruct-v0.2_summary,0.0,0.0,0.0,100.0,0.0,0.0
+Ensemble (abstract summaries),50.0,0.0,50.0,0.0,0.0,0.0
+Ensemble (extract summaries),90.9090909090909,0.0,9.090909090909092,0.0,0.0,0.0

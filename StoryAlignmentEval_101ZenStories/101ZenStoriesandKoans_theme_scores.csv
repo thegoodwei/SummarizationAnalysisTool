@@ -1,0 +1,11 @@
+,Complexity,Non-duality,Insight,Confusion,Mindfulness,Distraction,Simplicity,Detachment,Attachment,Dualism
+Bert-base_Kmeans,50.0,50.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+all-MiniLM-L6-v2_Agglomerative,0.0,0.0,0.0,0.0,0.0,33.33333333333333,0.0,0.0,0.0,66.66666666666666
+Roberta-base_nll,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,100.0
+GPT2_summary,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,100.0
+t5-base_summary,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,100.0
+bart-large-cnn_summary,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,100.0
+Phi-2_summary,0.0,0.0,0.0,0.0,100.0,0.0,0.0,0.0,0.0,0.0
+Gemma-2b-it_summary,100.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Llama-2-7b-chat-hf_summary,0.0,0.0,0.0,0.0,50.0,0.0,0.0,0.0,0.0,50.0
+Mistral-7B-Instruct-v0.2_summary,50.0,0.0,0.0,0.0,50.0,0.0,0.0,0.0,0.0,0.0

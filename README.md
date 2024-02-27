@@ -47,8 +47,8 @@ The comparative analytic capabilities to derive insights across models include:
 
 **Model Calibration Analysis**   
 
-- Sentence-level precision: Word Mover’s Distance between matched source/summary pairs  
-- Corpus-level distributions: Chi-squared statistical tests measure significance of differences in category distributions  
+- Sentence-level precision: Word Mover’s Distance between matched codebook/summary pairs  
+- Corpus-level distributions: Chi-squared statistical tests measure significance of differences in category distributions for each model  
 - Mean difference scores convey model uncertainty in making classification decisions, codifying only above-average theme categorizations
 
 **Quantification of Thematic Fidelity in Summarization**   

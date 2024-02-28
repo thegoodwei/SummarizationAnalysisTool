@@ -136,9 +136,8 @@ This multilayer quantitative view, combined with sampling representative sentenc
 - Matplotlib  
 - Seaborn   
 - SpaCy   
-- PsychoPy  
 
-**GPU Requirements**: Testing utilized consumer GPUs including Nvidia RTX 3060. Performance is feasible on most mid-range modern discrete GPUs. Summarization of long transcripts may require proportional VRAM capacity.  
+**GPU Requirements**: Testing utilized consumer GPUs including Nvidia RTX 3060. Performance is feasible on most mid-range modern discrete GPUs. Summarization of long transcripts may require proportional VRAM capacity, and this will take time.
 
 To manage memory, batch chunking is dynamically calibrated within the maximum attention window of each transformer model. This prevents truncation but does require temporarily higher utilization during peak Steps.
 

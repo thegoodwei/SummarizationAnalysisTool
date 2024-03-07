@@ -1,0 +1,25 @@
+name: moral_analysis
+channels:
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - build-essential
+  - pip:
+    - torch
+    - transformers
+    - scikit-learn
+    - scipy
+    - nltk
+    - spacy
+    - numpy
+    - pandas
+    - pysrt
+    - requests
+    - beautifulsoup4
+    - matplotlib
+    - seaborn
+    - youtube_transcript_api
+    - sentence-transformers
+    - anthropic
+    - openai
